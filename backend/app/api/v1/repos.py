@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import UserRole, get_current_user, require_role
 from app.models.organization import Organization
@@ -34,6 +35,31 @@ log = structlog.get_logger("api.repos")
 class RepoConnectRequest(BaseModel):
     installation_id: str
     provider: str = "github"
+
+
+@router.get("/repos/github/setup")
+async def github_setup_info(current_user: User = Depends(get_current_user)):
+    """Return GitHub App install URLs and configuration hints for the frontend."""
+    app_slug = (settings.GITHUB_APP_NAME or "").strip()
+    if not app_slug:
+        app_slug = "codesentinel"
+
+    install_url = f"https://github.com/apps/{app_slug}/installations/new"
+    login_then_install_url = f"https://github.com/login?return_to=/apps/{app_slug}/installations/new"
+
+    return {
+        "app_slug": app_slug,
+        "install_url": install_url,
+        "login_then_install_url": login_then_install_url,
+        "configured": {
+            "app_id": bool(settings.GITHUB_APP_ID),
+            "private_key": bool(settings.GITHUB_APP_PRIVATE_KEY),
+            "webhook_secret": bool(settings.GITHUB_APP_WEBHOOK_SECRET),
+            "client_id": bool(settings.GITHUB_APP_CLIENT_ID),
+            "client_secret": bool(settings.GITHUB_APP_CLIENT_SECRET),
+            "ready": bool(settings.github_configured),
+        },
+    }
 
 
 class RepoConfigRequest(BaseModel):

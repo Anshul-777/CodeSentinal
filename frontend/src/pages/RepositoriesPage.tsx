@@ -43,6 +43,11 @@ export default function RepositoriesPage() {
     queryFn: () => apiClient.get('/repos').then((r) => r.data),
   })
 
+  const { data: githubSetup } = useQuery({
+    queryKey: ['github-setup'],
+    queryFn: () => apiClient.get('/repos/github/setup').then((r) => r.data),
+  })
+
   const repos: Repository[] = data?.repositories || []
   const total: number = data?.total || 0
 
@@ -85,7 +90,12 @@ export default function RepositoriesPage() {
     connectMutation.mutate(installationId)
   }
 
-  const ghAppUrl = `https://github.com/apps/${import.meta.env.VITE_GITHUB_APP_NAME || 'codesentinel'}/installations/new`
+  const ghInstallUrl: string = githubSetup?.install_url || 'https://github.com/apps/codesentinel/installations/new'
+  const ghLoginThenInstallUrl: string = githubSetup?.login_then_install_url || ghInstallUrl
+  const ghConfigured = githubSetup?.configured?.ready
+  const ghAppSlug = githubSetup?.app_slug || 'codesentinel'
+  const connectHref = ghConfigured ? ghLoginThenInstallUrl : 'https://github.com/settings/apps/new'
+  const connectLabel = ghConfigured ? 'Login and Install GitHub App' : 'Create GitHub App'
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
@@ -138,22 +148,36 @@ export default function RepositoriesPage() {
 
             <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
               <a
-                href={ghAppUrl}
-                target="_blank"
-                rel="noopener noreferrer"
+                href={connectHref}
                 className="btn-primary"
               >
                 <Github className="w-4 h-4" />
-                Install GitHub App
+                {connectLabel}
                 <ExternalLink className="w-3.5 h-3.5" />
               </a>
+              <a
+                href={ghInstallUrl}
+                className="btn-secondary"
+              >
+                Open install page directly
+              </a>
               <p className="text-xs text-gray-400">
-                After installing, repos will appear here within 30 seconds.
+                After install, if GitHub redirects with installation_id, connection completes automatically.
               </p>
             </div>
 
+            {!ghConfigured && (
+              <div className="mt-4 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 max-w-2xl mx-auto">
+                GitHub backend config is incomplete. Current app slug is <span className="font-mono">{ghAppSlug}</span>. If install page shows 404, set correct <span className="font-mono">GITHUB_APP_NAME</span> in backend env and restart backend.
+              </div>
+            )}
+
             <div className="mt-5 pt-5 border-t border-gray-200 max-w-md mx-auto text-left">
-              <p className="text-xs text-gray-500 mb-2">If redirect/callback is not configured yet, paste GitHub installation id manually:</p>
+              <p className="text-xs text-gray-500 mb-2">Manual fallback: paste GitHub installation id only (digits). You can copy it from:</p>
+              <ul className="text-xs text-gray-500 list-disc pl-5 mb-2 space-y-1">
+                <li>the browser URL after install: <span className="font-mono">?installation_id=12345678</span></li>
+                <li>GitHub settings install URL: <span className="font-mono">/settings/installations/12345678</span></li>
+              </ul>
               <div className="flex gap-2">
                 <input
                   value={manualInstallationId}
