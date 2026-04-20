@@ -97,6 +97,8 @@ See `backend/.env.example` for all available settings with documentation.
 
 **For GitHub integration:**
 - `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_APP_WEBHOOK_SECRET`
+- `GITHUB_APP_NAME` should be a unique app slug like `CodeSentinelAI` if `Code-Sentinel` is reserved for your account.
+- `GITHUB_WEBHOOK_URL` should point to your permanent public backend URL ending in `/webhooks/github`.
 
 **For AI (at least one):**
 - `OLLAMA_BASE_URL` (default: local, no config needed)
