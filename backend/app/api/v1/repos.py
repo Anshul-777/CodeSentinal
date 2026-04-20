@@ -81,7 +81,20 @@ async def github_manifest_start(
     """Return a prefilled GitHub App manifest and a signed state token."""
     app_display_name = settings.APP_NAME or "CodeSentinel"
     callback_url = f"{settings.FRONTEND_URL.rstrip('/')}/app/repositories"
-    webhook_url = f"{str(request.base_url).rstrip('/')}/webhooks/github"
+    runtime_webhook_url = f"{str(request.base_url).rstrip('/')}/webhooks/github"
+
+    # GitHub rejects localhost/intranet webhook URLs for manifest creation.
+    webhook_url = runtime_webhook_url
+    webhook_placeholder = False
+    lower_url = webhook_url.lower()
+    if (
+        "localhost" in lower_url
+        or "127.0.0.1" in lower_url
+        or "::1" in lower_url
+        or lower_url.startswith("http://")
+    ):
+        webhook_url = "https://example.com/webhooks/github"
+        webhook_placeholder = True
 
     state_payload = {
         "sub": str(current_user.id),
@@ -107,8 +120,6 @@ async def github_manifest_start(
             "push",
             "check_run",
             "check_suite",
-            "installation",
-            "installation_repositories",
         ],
         "default_permissions": {
             "checks": "write",
@@ -128,6 +139,8 @@ async def github_manifest_start(
         "state": state_token,
         "callback_url": callback_url,
         "webhook_url": webhook_url,
+        "runtime_webhook_url": runtime_webhook_url,
+        "webhook_placeholder": webhook_placeholder,
         "expires_in_seconds": 900,
     }
 

@@ -124,6 +124,11 @@ export default function RepositoriesPage() {
 
   const startPrefilledGithubApp = async () => {
     const data = await manifestStartMutation.mutateAsync()
+
+    if (data?.webhook_placeholder) {
+      toast('GitHub App will be created with a placeholder webhook URL. After creation, set webhook to your public backend URL.')
+    }
+
     const form = document.createElement('form')
     form.method = 'POST'
     form.action = data.github_manifest_new_url
@@ -204,7 +209,7 @@ export default function RepositoriesPage() {
                   className="btn-primary"
                 >
                   <Github className="w-4 h-4" />
-                  {manifestStartMutation.isPending ? 'Preparing prefilled app...' : 'Create Prefilled GitHub App'}
+                  {manifestStartMutation.isPending ? 'Preparing setup...' : 'Connect GitHub'}
                   <ExternalLink className="w-3.5 h-3.5" />
                 </button>
               )}
@@ -215,12 +220,14 @@ export default function RepositoriesPage() {
                   <ExternalLink className="w-3.5 h-3.5" />
                 </a>
               )}
-              <a
-                href={ghInstallUrl}
-                className="btn-secondary"
-              >
-                Open install page directly
-              </a>
+              {ghConfigured && (
+                <a
+                  href={ghInstallUrl}
+                  className="btn-secondary"
+                >
+                  Open install page directly
+                </a>
+              )}
               <p className="text-xs text-gray-400">
                 After install, if GitHub redirects with installation_id, connection completes automatically.
               </p>
@@ -228,7 +235,7 @@ export default function RepositoriesPage() {
 
             {!ghConfigured && (
               <div className="mt-4 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 max-w-2xl mx-auto">
-                GitHub backend config is incomplete. Current app slug is <span className="font-mono">{ghAppSlug}</span>. If install page shows 404, set correct <span className="font-mono">GITHUB_APP_NAME</span> in backend env and restart backend.
+                GitHub backend config is incomplete. Current app slug is <span className="font-mono">{ghAppSlug}</span>. The auto setup will create app credentials for you. If running locally, you must later update webhook URL in GitHub App settings to your public backend URL.
               </div>
             )}
 
