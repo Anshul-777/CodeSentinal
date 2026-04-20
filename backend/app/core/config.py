@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     GITHUB_APP_NAME: str = "codesentinel"
     GITHUB_APP_PRIVATE_KEY: Optional[str] = None
     GITHUB_APP_WEBHOOK_SECRET: Optional[str] = None
+    GITHUB_WEBHOOK_URL: Optional[str] = None
     GITHUB_APP_CLIENT_ID: Optional[str] = None
     GITHUB_APP_CLIENT_SECRET: Optional[str] = None
 

@@ -83,8 +83,8 @@ async def github_manifest_start(
     callback_url = f"{settings.FRONTEND_URL.rstrip('/')}/app/repositories"
     runtime_webhook_url = f"{str(request.base_url).rstrip('/')}/webhooks/github"
 
-    # GitHub rejects localhost/intranet webhook URLs for manifest creation.
-    webhook_url = runtime_webhook_url
+    # Prefer a permanent public webhook URL from env; only fall back to a safe placeholder locally.
+    webhook_url = (settings.GITHUB_WEBHOOK_URL or "").strip() or runtime_webhook_url
     webhook_placeholder = False
     lower_url = webhook_url.lower()
     if (
@@ -139,6 +139,7 @@ async def github_manifest_start(
         "state": state_token,
         "callback_url": callback_url,
         "webhook_url": webhook_url,
+        "configured_webhook_url": settings.GITHUB_WEBHOOK_URL,
         "runtime_webhook_url": runtime_webhook_url,
         "webhook_placeholder": webhook_placeholder,
         "expires_in_seconds": 900,
