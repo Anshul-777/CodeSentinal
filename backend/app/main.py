@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
@@ -66,12 +67,31 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # so CORS middleware can add headers (raw exceptions bypass CORS)
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    from fastapi.responses import JSONResponse
-    structlog.get_logger("app").error("Unhandled error", path=request.url.path, error=str(exc))
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "Internal server error. Check backend logs for details."},
+    request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+    structlog.get_logger("app").exception(
+        "Unhandled error",
+        path=request.url.path,
+        request_id=request_id,
+        error=str(exc),
     )
+
+    response = JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal server error.",
+            "error": str(exc),
+            "request_id": request_id,
+        },
+    )
+
+    origin = request.headers.get("origin")
+    if origin and origin in settings.ALLOWED_ORIGINS:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Vary"] = "Origin"
+
+    response.headers["X-Request-ID"] = request_id
+    return response
 
 app.add_middleware(
     CORSMiddleware,
@@ -89,7 +109,36 @@ async def request_middleware(request: Request, call_next):
     request_id = str(uuid.uuid4())
     start = time.perf_counter()
     request.state.request_id = request_id
-    response: Response = await call_next(request)
+    try:
+        response: Response = await call_next(request)
+    except Exception as exc:
+        duration = time.perf_counter() - start
+        structlog.get_logger("app").exception(
+            "Request failed",
+            path=request.url.path,
+            method=request.method,
+            request_id=request_id,
+            error=str(exc),
+        )
+        response = JSONResponse(
+            status_code=500,
+            content={
+                "detail": "Internal server error.",
+                "error": str(exc),
+                "request_id": request_id,
+            },
+        )
+
+        origin = request.headers.get("origin")
+        if origin and origin in settings.ALLOWED_ORIGINS:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            response.headers["Vary"] = "Origin"
+
+        response.headers["X-Request-ID"] = request_id
+        response.headers["X-Process-Time"] = f"{duration:.4f}"
+        return response
+
     duration = time.perf_counter() - start
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Process-Time"] = f"{duration:.4f}"

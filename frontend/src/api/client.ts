@@ -79,8 +79,14 @@ apiClient.interceptors.response.use(
     // Show error toast for non-auth errors
     if (error.response?.status !== 401) {
       const detail = (error.response?.data as any)?.detail
+      const rawError = (error.response?.data as any)?.error
+      const requestId = error.response?.headers?.['x-request-id'] || (error.response?.data as any)?.request_id
       if (detail && typeof detail === 'string' && !originalRequest.url?.includes('/auth/')) {
-        toast.error(detail, { duration: 5000 })
+        const suffix = requestId ? ` (Request ID: ${requestId})` : ''
+        const message = rawError && typeof rawError === 'string'
+          ? `${detail} ${rawError}${suffix}`
+          : `${detail}${suffix}`
+        toast.error(message, { duration: 8000 })
       }
     }
 
