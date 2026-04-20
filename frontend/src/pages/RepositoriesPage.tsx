@@ -48,6 +48,24 @@ export default function RepositoriesPage() {
     queryFn: () => apiClient.get('/repos/github/setup').then((r) => r.data),
   })
 
+  const manifestStartMutation = useMutation({
+    mutationFn: () => apiClient.get('/repos/github/manifest/start').then((r) => r.data),
+    onError: (e: any) => {
+      toast.error(e?.response?.data?.detail || 'Could not start prefilled GitHub App setup')
+    },
+  })
+
+  const manifestCompleteMutation = useMutation({
+    mutationFn: (p: { code: string; state: string }) => apiClient.post('/repos/github/manifest/complete', p).then((r) => r.data),
+    onSuccess: (data) => {
+      toast.success('GitHub App created and credentials saved. Now install it.')
+      window.location.href = data.login_then_install_url || data.install_url
+    },
+    onError: (e: any) => {
+      toast.error(e?.response?.data?.detail || 'Could not complete GitHub App setup')
+    },
+  })
+
   const repos: Repository[] = data?.repositories || []
   const total: number = data?.total || 0
 
@@ -81,6 +99,20 @@ export default function RepositoriesPage() {
     setSearchParams(next, { replace: true })
   }, [searchParams, setSearchParams])
 
+  useEffect(() => {
+    const code = searchParams.get('code')
+    const state = searchParams.get('state')
+    if (!code || !state) return
+    if (manifestCompleteMutation.isPending) return
+
+    manifestCompleteMutation.mutate({ code, state })
+
+    const next = new URLSearchParams(searchParams)
+    next.delete('code')
+    next.delete('state')
+    setSearchParams(next, { replace: true })
+  }, [searchParams, setSearchParams])
+
   const onManualConnect = () => {
     const installationId = manualInstallationId.trim()
     if (!installationId) {
@@ -90,12 +122,30 @@ export default function RepositoriesPage() {
     connectMutation.mutate(installationId)
   }
 
+  const startPrefilledGithubApp = async () => {
+    const data = await manifestStartMutation.mutateAsync()
+    const form = document.createElement('form')
+    form.method = 'POST'
+    form.action = data.github_manifest_new_url
+    form.style.display = 'none'
+
+    const input = document.createElement('input')
+    input.type = 'hidden'
+    input.name = 'manifest'
+    input.value = JSON.stringify(data.manifest)
+    form.appendChild(input)
+
+    document.body.appendChild(form)
+    form.submit()
+    form.remove()
+  }
+
   const ghInstallUrl: string = githubSetup?.install_url || 'https://github.com/apps/codesentinel/installations/new'
   const ghLoginThenInstallUrl: string = githubSetup?.login_then_install_url || ghInstallUrl
   const ghConfigured = githubSetup?.configured?.ready
   const ghAppSlug = githubSetup?.app_slug || 'codesentinel'
   const connectHref = ghConfigured ? ghLoginThenInstallUrl : 'https://github.com/settings/apps/new'
-  const connectLabel = ghConfigured ? 'Login and Install GitHub App' : 'Create GitHub App'
+  const connectLabel = ghConfigured ? 'Login and Install GitHub App' : 'Create GitHub App (manual)'
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
@@ -147,14 +197,24 @@ export default function RepositoriesPage() {
             </div>
 
             <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
-              <a
-                href={connectHref}
-                className="btn-primary"
-              >
-                <Github className="w-4 h-4" />
-                {connectLabel}
-                <ExternalLink className="w-3.5 h-3.5" />
-              </a>
+              {!ghConfigured && (
+                <button
+                  onClick={startPrefilledGithubApp}
+                  disabled={manifestStartMutation.isPending}
+                  className="btn-primary"
+                >
+                  <Github className="w-4 h-4" />
+                  {manifestStartMutation.isPending ? 'Preparing prefilled app...' : 'Create Prefilled GitHub App'}
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </button>
+              )}
+              {ghConfigured && (
+                <a href={connectHref} className="btn-primary">
+                  <Github className="w-4 h-4" />
+                  {connectLabel}
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+              )}
               <a
                 href={ghInstallUrl}
                 className="btn-secondary"

@@ -5,10 +5,15 @@ view scan history, and disconnect.
 """
 from __future__ import annotations
 
+import os
+import time
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
+import httpx
+import jwt as pyjwt
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
@@ -37,6 +42,11 @@ class RepoConnectRequest(BaseModel):
     provider: str = "github"
 
 
+class GitHubManifestCompleteRequest(BaseModel):
+    code: str
+    state: str
+
+
 @router.get("/repos/github/setup")
 async def github_setup_info(current_user: User = Depends(get_current_user)):
     """Return GitHub App install URLs and configuration hints for the frontend."""
@@ -51,6 +61,7 @@ async def github_setup_info(current_user: User = Depends(get_current_user)):
         "app_slug": app_slug,
         "install_url": install_url,
         "login_then_install_url": login_then_install_url,
+        "manifest_url": "https://github.com/settings/apps/new",
         "configured": {
             "app_id": bool(settings.GITHUB_APP_ID),
             "private_key": bool(settings.GITHUB_APP_PRIVATE_KEY),
@@ -59,6 +70,129 @@ async def github_setup_info(current_user: User = Depends(get_current_user)):
             "client_secret": bool(settings.GITHUB_APP_CLIENT_SECRET),
             "ready": bool(settings.github_configured),
         },
+    }
+
+
+@router.get("/repos/github/manifest/start")
+async def github_manifest_start(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+):
+    """Return a prefilled GitHub App manifest and a signed state token."""
+    app_display_name = settings.APP_NAME or "CodeSentinel"
+    callback_url = f"{settings.FRONTEND_URL.rstrip('/')}/app/repositories"
+    webhook_url = f"{str(request.base_url).rstrip('/')}/webhooks/github"
+
+    state_payload = {
+        "sub": str(current_user.id),
+        "org": str(current_user.primary_org_id) if current_user.primary_org_id else None,
+        "iat": int(time.time()),
+        "exp": int(time.time()) + 900,
+        "nonce": str(uuid.uuid4()),
+    }
+    state_token = pyjwt.encode(state_payload, settings.SECRET_KEY, algorithm="HS256")
+
+    manifest = {
+        "name": app_display_name,
+        "url": settings.FRONTEND_URL,
+        "hook_attributes": {
+            "url": webhook_url,
+            "active": True,
+        },
+        "redirect_url": callback_url,
+        "description": "AI-powered DevSecOps security app for PR scans, checks, and auto-fixes.",
+        "public": False,
+        "default_events": [
+            "pull_request",
+            "push",
+            "check_run",
+            "check_suite",
+            "installation",
+            "installation_repositories",
+        ],
+        "default_permissions": {
+            "checks": "write",
+            "contents": "read",
+            "issues": "write",
+            "metadata": "read",
+            "pull_requests": "write",
+            "statuses": "write",
+        },
+        "request_oauth_on_install": False,
+        "setup_url": callback_url,
+    }
+
+    return {
+        "github_manifest_new_url": f"https://github.com/settings/apps/new?state={state_token}",
+        "manifest": manifest,
+        "state": state_token,
+        "callback_url": callback_url,
+        "webhook_url": webhook_url,
+        "expires_in_seconds": 900,
+    }
+
+
+@router.post("/repos/github/manifest/complete")
+async def github_manifest_complete(
+    payload: GitHubManifestCompleteRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Exchange GitHub manifest code for app credentials and persist them into env."""
+    try:
+        decoded = pyjwt.decode(payload.state, settings.SECRET_KEY, algorithms=["HS256"])
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid state token: {exc}")
+
+    if str(decoded.get("sub")) != str(current_user.id):
+        raise HTTPException(status_code=403, detail="State token does not belong to current user.")
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            f"https://api.github.com/app-manifests/{payload.code}/conversions",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+        if resp.status_code >= 400:
+            raise HTTPException(status_code=422, detail=f"GitHub manifest conversion failed: {resp.text[:300]}")
+        data = resp.json()
+
+    app_id = str(data.get("id") or "")
+    app_slug = data.get("slug") or settings.GITHUB_APP_NAME or "codesentinel"
+    pem = data.get("pem") or ""
+    webhook_secret = data.get("webhook_secret") or ""
+    client_id = data.get("client_id") or ""
+    client_secret = data.get("client_secret") or ""
+
+    if not app_id or not pem or not webhook_secret:
+        raise HTTPException(status_code=422, detail="GitHub conversion response missing required credentials.")
+
+    escaped_pem = pem.replace("\n", "\\n")
+    env_updates = {
+        "GITHUB_APP_ID": app_id,
+        "GITHUB_APP_NAME": app_slug,
+        "GITHUB_APP_PRIVATE_KEY": escaped_pem,
+        "GITHUB_APP_WEBHOOK_SECRET": webhook_secret,
+        "GITHUB_APP_CLIENT_ID": client_id,
+        "GITHUB_APP_CLIENT_SECRET": client_secret,
+    }
+
+    env_path = Path(".env")
+    for key, value in env_updates.items():
+        _upsert_env_var(env_path, key, value)
+
+    for key, value in env_updates.items():
+        os.environ[key] = value
+        setattr(settings, key, value)
+
+    install_url = f"https://github.com/apps/{app_slug}/installations/new"
+    return {
+        "message": "GitHub App credentials saved successfully.",
+        "app_slug": app_slug,
+        "app_id": app_id,
+        "install_url": install_url,
+        "login_then_install_url": f"https://github.com/login?return_to=/apps/{app_slug}/installations/new",
     }
 
 
@@ -355,3 +489,22 @@ def _scan_to_dict(scan: Scan) -> dict:
         "created_at": scan.created_at.isoformat(),
         "completed_at": scan.completed_at.isoformat() if scan.completed_at else None,
     }
+
+
+def _upsert_env_var(env_path: Path, key: str, value: str) -> None:
+    lines: list[str] = []
+    if env_path.exists():
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+
+    prefix = f"{key}="
+    replaced = False
+    for i, line in enumerate(lines):
+        if line.startswith(prefix):
+            lines[i] = f"{key}={value}"
+            replaced = True
+            break
+
+    if not replaced:
+        lines.append(f"{key}={value}")
+
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
