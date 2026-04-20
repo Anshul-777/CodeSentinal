@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -22,9 +21,9 @@ if TYPE_CHECKING:
 class Fix(Base):
     __tablename__ = "fixes"
 
-    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
-    finding_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("findings.id", ondelete="CASCADE"), nullable=False, index=True)
-    scan_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("scans.id", ondelete="CASCADE"), nullable=False, index=True)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    finding_id: Mapped[str] = mapped_column(String(36), ForeignKey("findings.id", ondelete="CASCADE"), nullable=False, index=True)
+    scan_id: Mapped[str] = mapped_column(String(36), ForeignKey("scans.id", ondelete="CASCADE"), nullable=False, index=True)
 
     # Fix type
     fix_type: Mapped[str] = mapped_column(String(50), nullable=False)  # automated|suggested|manual
@@ -63,7 +62,7 @@ class Fix(Base):
     fix_commit_sha: Mapped[Optional[str]] = mapped_column(String(40))
     fix_pr_number: Mapped[Optional[int]] = mapped_column(Integer)
     fix_pr_url: Mapped[Optional[str]] = mapped_column(String(500))
-    applied_by_user_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"))
+    applied_by_user_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id", ondelete="SET NULL"))
     application_error: Mapped[Optional[str]] = mapped_column(String(1000))
 
     # AI model used

@@ -25,6 +25,8 @@ apiClient.interceptors.request.use(
 // ── Response interceptor: handle 401 with token refresh ───────────────────
 let isRefreshing = false
 let failedQueue: Array<{ resolve: (value: string) => void; reject: (reason?: any) => void }> = []
+let lastErrorToastSignature = ''
+let lastErrorToastAt = 0
 
 function processQueue(error: any, token: string | null = null) {
   failedQueue.forEach((prom) => {
@@ -86,7 +88,14 @@ apiClient.interceptors.response.use(
         const message = rawError && typeof rawError === 'string'
           ? `${detail} ${rawError}${suffix}`
           : `${detail}${suffix}`
-        toast.error(message, { duration: 8000 })
+
+        const now = Date.now()
+        const signature = `${originalRequest.method || 'GET'}:${originalRequest.url || ''}:${message}`
+        if (signature !== lastErrorToastSignature || now - lastErrorToastAt > 5000) {
+          lastErrorToastSignature = signature
+          lastErrorToastAt = now
+          toast.error(message, { duration: 8000 })
+        }
       }
     }
 

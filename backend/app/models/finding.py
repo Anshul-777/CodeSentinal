@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, List, Optional
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -23,9 +22,9 @@ if TYPE_CHECKING:
 class Finding(Base):
     __tablename__ = "findings"
 
-    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
-    scan_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("scans.id", ondelete="CASCADE"), nullable=False, index=True)
-    repository_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("repositories.id", ondelete="CASCADE"), nullable=False, index=True)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    scan_id: Mapped[str] = mapped_column(String(36), ForeignKey("scans.id", ondelete="CASCADE"), nullable=False, index=True)
+    repository_id: Mapped[str] = mapped_column(String(36), ForeignKey("repositories.id", ondelete="CASCADE"), nullable=False, index=True)
 
     # Source agent
     agent_type: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -84,7 +83,7 @@ class Finding(Base):
     # False positive feedback
     is_false_positive: Mapped[bool] = mapped_column(Boolean, default=False)
     false_positive_reason: Mapped[Optional[str]] = mapped_column(String(500))
-    false_positive_reported_by: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"))
+    false_positive_reported_by: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id", ondelete="SET NULL"))
     false_positive_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
     # Fix availability

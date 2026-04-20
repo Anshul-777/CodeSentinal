@@ -51,7 +51,9 @@ export default function RepositoriesPage() {
   const manifestStartMutation = useMutation({
     mutationFn: () => apiClient.get('/repos/github/manifest/start').then((r) => r.data),
     onError: (e: any) => {
-      toast.error(e?.response?.data?.detail || 'Could not start prefilled GitHub App setup')
+      if (!e?.response) {
+        toast.error('Could not start prefilled GitHub App setup')
+      }
     },
   })
 
@@ -62,7 +64,9 @@ export default function RepositoriesPage() {
       window.location.href = data.login_then_install_url || data.install_url
     },
     onError: (e: any) => {
-      toast.error(e?.response?.data?.detail || 'Could not complete GitHub App setup')
+      if (!e?.response) {
+        toast.error('Could not complete GitHub App setup')
+      }
     },
   })
 
@@ -80,7 +84,9 @@ export default function RepositoriesPage() {
       setManualInstallationId('')
     },
     onError: (e: any) => {
-      toast.error(e?.response?.data?.detail || 'Could not complete GitHub connection')
+      if (!e?.response) {
+        toast.error('Could not complete GitHub connection')
+      }
     },
   })
 
