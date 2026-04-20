@@ -4,7 +4,7 @@ set -e
 echo "=== CodeSentinel Backend Startup ==="
 
 # Run database migrations before starting the server
-# This is safe to run on every deploy â€” alembic skips already-applied migrations
+# This is safe to run on every deploy - alembic skips already-applied migrations
 echo "Running database migrations..."
 alembic upgrade head
 echo "Migrations complete."

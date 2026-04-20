@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     SECRET_KEY: str = secrets.token_urlsafe(64)
     FRONTEND_URL: str = "http://localhost:5173"
     ALLOWED_ORIGINS: List[str] = ["http://localhost:5173", "http://localhost:3000"]
+    CORS_ALLOW_ORIGIN_REGEX: Optional[str] = r"^https://[a-z0-9-]+\.vercel\.app$"
 
     # ── Database ───────────────────────────────────────────────────
     DATABASE_URL: str = "postgresql+asyncpg://codesentinel:password@localhost:5432/codesentinel"
@@ -168,6 +169,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def auto_encryption_key(self) -> "Settings":
+        # Always include FRONTEND_URL in allowed origins for browser auth flows.
+        if self.FRONTEND_URL and self.FRONTEND_URL not in self.ALLOWED_ORIGINS:
+            self.ALLOWED_ORIGINS.append(self.FRONTEND_URL)
+
         if not self.ENCRYPTION_KEY and not self.is_production:
             from cryptography.fernet import Fernet
             self.ENCRYPTION_KEY = Fernet.generate_key().decode()

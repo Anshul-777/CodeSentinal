@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import time
 import uuid
+import re
 from contextlib import asynccontextmanager
 
 import structlog
@@ -27,6 +28,16 @@ log = structlog.get_logger("app")
 REQUEST_COUNT = Counter("cs_http_requests_total", "HTTP requests", ["method", "endpoint", "status"])
 REQUEST_DURATION = Histogram("cs_http_duration_seconds", "HTTP duration", ["method", "endpoint"])
 limiter = Limiter(key_func=get_remote_address)
+
+
+def _origin_allowed(origin: str | None) -> bool:
+    if not origin:
+        return False
+    if origin in settings.ALLOWED_ORIGINS:
+        return True
+    if settings.CORS_ALLOW_ORIGIN_REGEX:
+        return bool(re.match(settings.CORS_ALLOW_ORIGIN_REGEX, origin))
+    return False
 
 
 @asynccontextmanager
@@ -85,7 +96,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
     origin = request.headers.get("origin")
-    if origin and origin in settings.ALLOWED_ORIGINS:
+    if _origin_allowed(origin):
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Credentials"] = "true"
         response.headers["Vary"] = "Origin"
@@ -96,6 +107,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
+    allow_origin_regex=settings.CORS_ALLOW_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -130,7 +142,7 @@ async def request_middleware(request: Request, call_next):
         )
 
         origin = request.headers.get("origin")
-        if origin and origin in settings.ALLOWED_ORIGINS:
+        if _origin_allowed(origin):
             response.headers["Access-Control-Allow-Origin"] = origin
             response.headers["Access-Control-Allow-Credentials"] = "true"
             response.headers["Vary"] = "Origin"
