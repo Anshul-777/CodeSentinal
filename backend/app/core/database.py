@@ -80,3 +80,16 @@ async def check_db_connection() -> bool:
         return True
     except Exception:
         return False
+
+
+async def ensure_schema() -> None:
+    """Create any missing tables from ORM metadata.
+
+    This is a safety net for environments where an older migration revision
+    may have been marked as applied before full schema additions existed.
+    """
+    # Ensure model modules are imported so all table metadata is registered.
+    import app.models  # noqa: F401
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)

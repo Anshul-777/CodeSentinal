@@ -18,7 +18,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from app.core.config import settings
-from app.core.database import check_db_connection, engine
+from app.core.database import check_db_connection, engine, ensure_schema
 import app.core.logging  # noqa — configures structlog on import
 
 log = structlog.get_logger("app")
@@ -31,6 +31,13 @@ limiter = Limiter(key_func=get_remote_address)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("CodeSentinel starting", env=settings.APP_ENV, version=settings.APP_VERSION)
+    try:
+        await ensure_schema()
+        log.info("Schema sync complete")
+    except Exception as exc:
+        log.error("Schema sync FAILED", error=str(exc))
+        raise
+
     db_ok = await check_db_connection()
     if db_ok:
         log.info("Database connected")
