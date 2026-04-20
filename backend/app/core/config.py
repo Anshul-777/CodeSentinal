@@ -142,6 +142,17 @@ class Settings(BaseSettings):
     @classmethod
     def parse_origins(cls, v: Any) -> List[str]:
         if isinstance(v, str):
+            import json
+            # Handle JSON array strings like '["https://example.com","http://localhost"]'
+            stripped = v.strip()
+            if stripped.startswith("["):
+                try:
+                    parsed = json.loads(stripped)
+                    if isinstance(parsed, list):
+                        return [o.strip() for o in parsed if isinstance(o, str) and o.strip()]
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            # Fallback: comma-separated string
             return [o.strip() for o in v.split(",") if o.strip()]
         return v
 
