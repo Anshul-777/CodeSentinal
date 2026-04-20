@@ -1,0 +1,95 @@
+CodeSentinel Deployment and Setup Logs
+Updated: 2026-04-20
+
+Legend:
+[*] Completed
+[] Pending
+
+[*] Repository and Runtime Status
+[*] Codebase pushed to GitHub remote on branch main (origin configured).
+[*] Local backend stack running with Docker: postgres, redis, backend, worker.
+[*] Frontend is testable via local Vite dev server at http://localhost:5173 when needed.
+[*] GitHub App onboarding flow implemented in app (manifest start/complete, callback handling, install connect flow).
+[*] Permanent webhook URL config support added in backend via GITHUB_WEBHOOK_URL.
+
+[*] Core Fixes Already Done
+[*] Models page supports API key popup configuration flow and backend persistence.
+[*] Sidebar collapse button positioning fixed.
+[*] Repositories page handles GitHub installation callback and manual installation id fallback.
+[*] GitHub manifest payload adjusted for localhost constraints and supported event set.
+[*] Connect action text updated to "Connect GitHub" in onboarding UI.
+
+[*] GitHub App Config Progress
+[*] GitHub App identifiers collected and applied locally:
+    - GITHUB_APP_ID = 3440019
+    - GITHUB_APP_NAME = codesentinel-devsecops
+    - GITHUB_APP_CLIENT_ID is set
+    - GITHUB_APP_CLIENT_SECRET is set
+    - GITHUB_APP_WEBHOOK_SECRET is set
+[*] App public install link available: https://github.com/apps/codesentinel-devsecops
+[] GITHUB_APP_PRIVATE_KEY still needs final secure local insertion from PEM file (full key text with BEGIN/END lines).
+[] Replace placeholder webhook URL (https://example.com/webhooks/github) with permanent public backend URL after backend deploy.
+
+[*] Render Progress (Backend Infra)
+[*] Render Postgres created successfully:
+    - Instance: codesentinel-postgres
+    - Database: codesentinel_prod
+    - User: codesentinel_user
+    - Region: Oregon
+    - PostgreSQL version: 16
+    - Plan: Free
+[*] Render Redis (Key Value) created successfully:
+    - Instance: codesentinel-redis
+    - Region: Oregon
+    - Internal URL: redis://red-d7j0tprbc2fs739c0pt0:6379
+
+[] Remaining Render Steps (Do Next)
+[] Create Render Web Service (API) from this repo:
+    - Runtime: Docker
+    - Root directory: backend
+    - Dockerfile path: backend/Dockerfile
+[] Create Render Background Worker from this repo:
+    - Runtime: Docker
+    - Root directory: backend
+    - Dockerfile path: backend/Dockerfile.worker
+
+[] Required Render Env Vars (API and Worker)
+[] APP_ENV=production
+[] DEBUG=false
+[] FRONTEND_URL=<set temporary localhost now, replace with frontend domain later>
+[] ALLOWED_ORIGINS=["http://localhost:5173"] (temporary; replace with frontend domain later)
+[] SECRET_KEY=<production secret>
+[] JWT_SECRET_KEY=<production secret>
+[] ENCRYPTION_KEY=<fernet key>
+[] DATABASE_URL=postgresql+asyncpg://codesentinel_user:ZqrXa1IRhEvgxYSMJtgknltqAYV5svsf@dpg-d7j0ph7lklmc73a74ep0-a:5432/codesentinel_prod
+[] REDIS_URL=redis://red-d7j0tprbc2fs739c0pt0:6379/0
+[] CELERY_BROKER_URL=redis://red-d7j0tprbc2fs739c0pt0:6379/0
+[] CELERY_RESULT_BACKEND=redis://red-d7j0tprbc2fs739c0pt0:6379/1
+[] GITHUB_APP_ID=3440019
+[] GITHUB_APP_NAME=codesentinel-devsecops
+[] GITHUB_APP_PRIVATE_KEY=<full PEM private key>
+[] GITHUB_APP_WEBHOOK_SECRET=<already chosen secret>
+[] GITHUB_APP_CLIENT_ID=<already collected>
+[] GITHUB_APP_CLIENT_SECRET=<already collected>
+[] GITHUB_WEBHOOK_URL=https://<render-backend-domain>/webhooks/github
+
+[] Post-Deploy Verification Steps
+[] API health check: GET https://<render-backend-domain>/health should return healthy.
+[] Run migrations once on Render shell:
+    - alembic upgrade head
+[] Optional seed for test account on Render:
+    - python scripts/seed_test_account.py
+[] Update GitHub App webhook URL in GitHub settings to:
+    - https://<render-backend-domain>/webhooks/github
+[] Install GitHub App on target repository/account and verify webhook deliveries.
+[] Trigger test PR and confirm check run and scan workflow appear.
+
+[] Frontend Deployment (Later)
+[] Deploy frontend to Vercel.
+[] Set frontend env VITE_API_URL=https://<render-backend-domain>/api/v1
+[] Update backend FRONTEND_URL and ALLOWED_ORIGINS to Vercel URL.
+[] Re-test auth + repositories + GitHub connect flow end-to-end.
+
+Notes
+- Secrets are intentionally not printed in this file for safety.
+- Keep this file updated as each step completes to avoid repeated work/credit usage.
