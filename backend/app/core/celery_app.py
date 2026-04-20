@@ -6,13 +6,35 @@ from __future__ import annotations
 from celery import Celery
 from celery.schedules import crontab
 from kombu import Exchange, Queue
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from app.core.config import settings
 
+
+def _normalize_rediss_url(url: str) -> str:
+    """Ensure Redis TLS URL has ssl_cert_reqs query parameter."""
+    try:
+        parts = urlsplit(url)
+    except Exception:
+        return url
+
+    if parts.scheme != "rediss":
+        return url
+
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    if "ssl_cert_reqs" not in query:
+        query["ssl_cert_reqs"] = "required"
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+    return url
+
+
+broker_url = _normalize_rediss_url(settings.CELERY_BROKER_URL)
+result_backend_url = _normalize_rediss_url(settings.CELERY_RESULT_BACKEND)
+
 celery_app = Celery(
     "codesentinel",
-    broker=settings.CELERY_BROKER_URL,
-    backend=settings.CELERY_RESULT_BACKEND,
+    broker=broker_url,
+    backend=result_backend_url,
     include=["app.tasks.scan_tasks"],
 )
 

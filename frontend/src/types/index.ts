@@ -226,11 +226,14 @@ export interface AIProvider {
   type: 'local' | 'cloud_free' | 'cloud_paid'
   cost: string
   model: string
+  default_model?: string
+  models?: string[]
   available: boolean
   error?: string
   latency_ms?: number
   configured: boolean
   setup_url: string
+  selected?: boolean
 }
 
 // ── Audit Log ─────────────────────────────────────────────────────────────────

@@ -84,7 +84,9 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: Optional[str] = None
     ANTHROPIC_DEFAULT_MODEL: str = "claude-3-5-sonnet-20241022"
     GEMINI_API_KEY: Optional[str] = None
+    GEMINI_DEFAULT_MODEL: str = "gemini-1.5-flash"
     OPENROUTER_API_KEY: Optional[str] = None
+    OPENROUTER_DEFAULT_MODEL: str = "meta-llama/llama-3.1-8b-instruct:free"
 
     # ── Notifications ──────────────────────────────────────────────
     SLACK_BOT_TOKEN: Optional[str] = None

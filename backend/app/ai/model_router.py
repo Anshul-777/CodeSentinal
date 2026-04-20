@@ -314,23 +314,171 @@ class AnthropicAdapter:
         )
 
 
+class GeminiAdapter:
+    """Google Gemini adapter via Generative Language REST API."""
+
+    def __init__(self):
+        self.api_key = settings.GEMINI_API_KEY
+        self.default_model = settings.GEMINI_DEFAULT_MODEL
+
+    async def is_available(self) -> tuple[bool, Optional[str]]:
+        if not self.api_key:
+            return False, "GEMINI_API_KEY not set."
+        return True, None
+
+    async def complete(self, req: ModelRequest, model: Optional[str] = None) -> ModelResponse:
+        if not self.api_key:
+            raise ModelUnavailableError("GEMINI_API_KEY not configured.", provider="gemini")
+
+        target_model = model or self.default_model
+        start = time.perf_counter()
+
+        text_parts = []
+        if req.system_prompt:
+            text_parts.append(f"System: {req.system_prompt}")
+        text_parts.append(req.prompt)
+        prompt_text = "\n\n".join(text_parts)
+
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent"
+            f"?key={self.api_key}"
+        )
+
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(
+                    url,
+                    headers={"Content-Type": "application/json"},
+                    json={
+                        "contents": [{"parts": [{"text": prompt_text}]}],
+                        "generationConfig": {
+                            "temperature": req.temperature,
+                            "maxOutputTokens": req.max_tokens,
+                        },
+                    },
+                )
+                if resp.status_code == 429:
+                    raise QuotaExhaustedError("Gemini quota exhausted.", provider="gemini", details=resp.text)
+                resp.raise_for_status()
+                data = resp.json()
+        except QuotaExhaustedError:
+            raise
+        except Exception as exc:
+            raise ModelUnavailableError(f"Gemini error: {exc}", provider="gemini", details=str(exc))
+
+        latency = (time.perf_counter() - start) * 1000
+        candidates = data.get("candidates") or []
+        if not candidates:
+            raise ModelUnavailableError("Gemini returned no candidates.", provider="gemini", details=str(data))
+        parts = candidates[0].get("content", {}).get("parts", [])
+        content = "".join(p.get("text", "") for p in parts)
+
+        usage = data.get("usageMetadata", {})
+        prompt_tokens = usage.get("promptTokenCount", 0)
+        completion_tokens = usage.get("candidatesTokenCount", 0)
+        total_tokens = usage.get("totalTokenCount", prompt_tokens + completion_tokens)
+
+        return ModelResponse(
+            content=content,
+            provider="gemini",
+            model=target_model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            latency_ms=latency,
+            raw=data,
+        )
+
+
+class OpenRouterAdapter:
+    """OpenRouter adapter via OpenAI-compatible chat endpoint."""
+
+    def __init__(self):
+        self.api_key = settings.OPENROUTER_API_KEY
+        self.default_model = settings.OPENROUTER_DEFAULT_MODEL
+
+    async def is_available(self) -> tuple[bool, Optional[str]]:
+        if not self.api_key:
+            return False, "OPENROUTER_API_KEY not set."
+        return True, None
+
+    async def complete(self, req: ModelRequest, model: Optional[str] = None) -> ModelResponse:
+        if not self.api_key:
+            raise ModelUnavailableError("OPENROUTER_API_KEY not configured.", provider="openrouter")
+
+        target_model = model or self.default_model
+        start = time.perf_counter()
+
+        messages = []
+        if req.system_prompt:
+            messages.append({"role": "system", "content": req.system_prompt})
+        messages.append({"role": "user", "content": req.prompt})
+
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": "https://codesentinel.dev",
+                        "X-Title": "CodeSentinel",
+                    },
+                    json={
+                        "model": target_model,
+                        "messages": messages,
+                        "temperature": req.temperature,
+                        "max_tokens": req.max_tokens,
+                    },
+                )
+                if resp.status_code == 429:
+                    raise QuotaExhaustedError("OpenRouter quota exhausted.", provider="openrouter", details=resp.text)
+                resp.raise_for_status()
+                data = resp.json()
+        except QuotaExhaustedError:
+            raise
+        except Exception as exc:
+            raise ModelUnavailableError(f"OpenRouter error: {exc}", provider="openrouter", details=str(exc))
+
+        latency = (time.perf_counter() - start) * 1000
+        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        usage = data.get("usage", {})
+
+        return ModelResponse(
+            content=content,
+            provider="openrouter",
+            model=target_model,
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+            total_tokens=usage.get("total_tokens", 0),
+            latency_ms=latency,
+            raw=data,
+        )
+
+
 # ── Singleton adapters ────────────────────────────────────────────────────────
 _ollama = OllamaAdapter()
 _groq = GroqAdapter()
 _openai = OpenAIAdapter()
 _anthropic = AnthropicAdapter()
+_gemini = GeminiAdapter()
+_openrouter = OpenRouterAdapter()
 
 _ADAPTERS = {
     AIProvider.OLLAMA: _ollama,
     AIProvider.GROQ: _groq,
     AIProvider.OPENAI: _openai,
     AIProvider.ANTHROPIC: _anthropic,
+    AIProvider.GEMINI: _gemini,
+    AIProvider.OPENROUTER: _openrouter,
 }
 
 # Fallback chain: local first, then free cloud, then paid
 _FALLBACK_ORDER = [
     AIProvider.OLLAMA,
     AIProvider.GROQ,
+    AIProvider.GEMINI,
+    AIProvider.OPENROUTER,
     AIProvider.OPENAI,
     AIProvider.ANTHROPIC,
 ]
@@ -419,7 +567,7 @@ async def complete(
 
     raise ModelUnavailableError(
         "All AI providers are unavailable. "
-        "Please configure Ollama (local) or add a GROQ_API_KEY in Settings.",
+        "Please configure Ollama (local) or add GROQ/GEMINI/OPENROUTER keys in Settings.",
         details=str(last_error) if last_error else None,
     )
 

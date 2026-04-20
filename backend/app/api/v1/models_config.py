@@ -22,6 +22,37 @@ from app.models.user import User
 router = APIRouter()
 log = structlog.get_logger("api.models")
 
+PROVIDER_MODELS: dict[str, list[str]] = {
+    "ollama": [
+        "codellama:13b",
+        "llama3.1:8b",
+        "qwen2.5-coder:7b",
+    ],
+    "groq": [
+        "llama-3.1-70b-versatile",
+        "llama-3.1-8b-instant",
+        "gemma2-9b-it",
+    ],
+    "gemini": [
+        "gemini-1.5-flash",
+        "gemini-1.5-pro",
+        "gemini-2.0-flash",
+    ],
+    "openrouter": [
+        "meta-llama/llama-3.1-8b-instruct:free",
+        "google/gemma-2-9b-it:free",
+        "mistralai/mistral-7b-instruct:free",
+    ],
+    "openai": [
+        "gpt-4o-mini",
+        "gpt-4o",
+    ],
+    "anthropic": [
+        "claude-3-5-sonnet-20241022",
+        "claude-3-5-haiku-20241022",
+    ],
+}
+
 
 class ModelPreferenceRequest(BaseModel):
     provider: str
@@ -40,28 +71,45 @@ class ConfigureProviderRequest(BaseModel):
 
 
 @router.get("/models/providers")
-async def list_providers(current_user: User = Depends(get_current_user)):
+async def list_providers(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Return all configured AI providers with their availability status."""
     from app.ai.model_router import get_provider_statuses, AIProvider
     from app.core.config import settings
 
     statuses = await get_provider_statuses()
 
+    preferred_provider = None
+    preferred_model = None
+    if current_user.primary_org_id:
+        result = await db.execute(select(Organization).where(Organization.id == current_user.primary_org_id))
+        org = result.scalar_one_or_none()
+        if org:
+            preferred_provider = org.ai_provider_preference
+            preferred_model = org.ai_model_preference
+
     providers = []
     for ps in statuses:
         meta = _provider_meta(ps.provider)
+        models = PROVIDER_MODELS.get(ps.provider, [ps.model])
+        effective_model = preferred_model if preferred_provider == ps.provider and preferred_model else ps.model
         providers.append({
             "id": ps.provider,
             "name": meta["name"],
             "description": meta["description"],
             "type": meta["type"],
             "cost": meta["cost"],
-            "model": ps.model,
+            "model": effective_model,
+            "default_model": ps.model,
+            "models": models,
             "available": ps.available,
             "error": ps.error,
             "latency_ms": ps.latency_ms,
             "configured": _is_configured(ps.provider),
             "setup_url": meta["setup_url"],
+            "selected": preferred_provider == ps.provider,
         })
 
     return {"providers": providers}
@@ -197,16 +245,16 @@ def _provider_meta(provider: str) -> dict:
         },
         "gemini": {
             "name": "Google Gemini",
-            "description": "Gemini 1.5 Pro/Flash — large context window, good for full-repo analysis.",
-            "type": "cloud_paid",
-            "cost": "Pay per token",
+            "description": "Gemini Flash/Pro models with optional free quota depending on Google account limits.",
+            "type": "cloud_free",
+            "cost": "Free tier / Pay as you go",
             "setup_url": "https://aistudio.google.com/app/apikey",
         },
         "openrouter": {
             "name": "OpenRouter",
-            "description": "Access 100+ models with one API key. Useful for model comparison.",
-            "type": "cloud_paid",
-            "cost": "Pay per token",
+            "description": "Access multiple models including free-tier options with one API key.",
+            "type": "cloud_free",
+            "cost": "Free + Pay as you go",
             "setup_url": "https://openrouter.ai/keys",
         },
     }
