@@ -1,0 +1,443 @@
+"""
+CodeSentinel — AI Model Router
+Routes LLM calls to the right provider: Ollama → Groq → OpenAI → Anthropic → OpenRouter.
+Supports per-agent model overrides, honest quota/availability states, and fallback chain.
+Never fakes responses. If all providers fail, raises ModelUnavailableError.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import time
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, AsyncGenerator, Optional
+
+import httpx
+import structlog
+
+from app.core.config import settings
+
+log = structlog.get_logger("ai.router")
+
+
+class AIProvider(str, Enum):
+    OLLAMA = "ollama"
+    GROQ = "groq"
+    OPENAI = "openai"
+    ANTHROPIC = "anthropic"
+    GEMINI = "gemini"
+    OPENROUTER = "openrouter"
+
+
+class ModelUnavailableError(Exception):
+    """Raised when no AI provider is available or all have failed."""
+    def __init__(self, message: str, provider: Optional[str] = None, details: Optional[str] = None):
+        super().__init__(message)
+        self.provider = provider
+        self.details = details
+
+
+class QuotaExhaustedError(ModelUnavailableError):
+    """Raised when a provider key exists but quota is exhausted."""
+    pass
+
+
+@dataclass
+class ModelRequest:
+    prompt: str
+    system_prompt: Optional[str] = None
+    temperature: float = 0.1
+    max_tokens: int = 4096
+    # Agent-specific model override — None means use org default
+    provider_override: Optional[str] = None
+    model_override: Optional[str] = None
+
+
+@dataclass
+class ModelResponse:
+    content: str
+    provider: str
+    model: str
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    latency_ms: float = 0.0
+    raw: Optional[dict] = None
+
+
+@dataclass
+class ProviderStatus:
+    provider: str
+    model: str
+    available: bool
+    error: Optional[str] = None
+    latency_ms: Optional[float] = None
+
+
+class OllamaAdapter:
+    """Local Ollama adapter — truly free, no registration needed."""
+
+    def __init__(self):
+        self.base_url = settings.OLLAMA_BASE_URL
+        self.default_model = settings.OLLAMA_DEFAULT_MODEL
+        self.timeout = settings.OLLAMA_TIMEOUT
+
+    async def is_available(self) -> tuple[bool, Optional[str]]:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"{self.base_url}/api/tags")
+                if resp.status_code == 200:
+                    models = [m["name"] for m in resp.json().get("models", [])]
+                    if not models:
+                        return False, "Ollama is running but no models are pulled. Run: ollama pull codellama:13b"
+                    return True, None
+                return False, f"Ollama returned status {resp.status_code}"
+        except Exception as exc:
+            return False, f"Ollama not reachable at {self.base_url}: {exc}"
+
+    async def complete(self, req: ModelRequest, model: Optional[str] = None) -> ModelResponse:
+        target_model = model or self.default_model
+        start = time.perf_counter()
+
+        messages = []
+        if req.system_prompt:
+            messages.append({"role": "system", "content": req.system_prompt})
+        messages.append({"role": "user", "content": req.prompt})
+
+        payload = {
+            "model": target_model,
+            "messages": messages,
+            "stream": False,
+            "options": {
+                "temperature": req.temperature,
+                "num_predict": req.max_tokens,
+            },
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                resp = await client.post(f"{self.base_url}/api/chat", json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+        except httpx.HTTPStatusError as exc:
+            if "model not found" in str(exc).lower():
+                raise ModelUnavailableError(
+                    f"Model '{target_model}' not pulled in Ollama. Run: ollama pull {target_model}",
+                    provider="ollama",
+                    details=str(exc),
+                )
+            raise ModelUnavailableError(f"Ollama HTTP error: {exc}", provider="ollama", details=str(exc))
+        except Exception as exc:
+            raise ModelUnavailableError(f"Ollama unreachable: {exc}", provider="ollama", details=str(exc))
+
+        latency = (time.perf_counter() - start) * 1000
+        content = data.get("message", {}).get("content", "")
+        usage = data.get("usage", {})
+
+        return ModelResponse(
+            content=content,
+            provider="ollama",
+            model=target_model,
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+            total_tokens=usage.get("total_tokens", 0),
+            latency_ms=latency,
+            raw=data,
+        )
+
+
+class GroqAdapter:
+    """Groq free-tier adapter — fast inference on Llama/Mixtral models."""
+
+    def __init__(self):
+        self.api_key = settings.GROQ_API_KEY
+        self.default_model = settings.GROQ_DEFAULT_MODEL
+
+    async def is_available(self) -> tuple[bool, Optional[str]]:
+        if not self.api_key:
+            return False, "GROQ_API_KEY not set. Register free at https://console.groq.com"
+        return True, None
+
+    async def complete(self, req: ModelRequest, model: Optional[str] = None) -> ModelResponse:
+        if not self.api_key:
+            raise ModelUnavailableError("GROQ_API_KEY not configured.", provider="groq")
+
+        target_model = model or self.default_model
+        start = time.perf_counter()
+
+        messages = []
+        if req.system_prompt:
+            messages.append({"role": "system", "content": req.system_prompt})
+        messages.append({"role": "user", "content": req.prompt})
+
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+                    json={
+                        "model": target_model,
+                        "messages": messages,
+                        "temperature": req.temperature,
+                        "max_tokens": req.max_tokens,
+                    },
+                )
+                if resp.status_code == 429:
+                    raise QuotaExhaustedError("Groq rate limit or quota exhausted.", provider="groq", details=resp.text)
+                resp.raise_for_status()
+                data = resp.json()
+        except QuotaExhaustedError:
+            raise
+        except Exception as exc:
+            raise ModelUnavailableError(f"Groq API error: {exc}", provider="groq", details=str(exc))
+
+        latency = (time.perf_counter() - start) * 1000
+        content = data["choices"][0]["message"]["content"]
+        usage = data.get("usage", {})
+
+        return ModelResponse(
+            content=content,
+            provider="groq",
+            model=target_model,
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+            total_tokens=usage.get("total_tokens", 0),
+            latency_ms=latency,
+            raw=data,
+        )
+
+
+class OpenAIAdapter:
+    def __init__(self):
+        self.api_key = settings.OPENAI_API_KEY
+        self.default_model = settings.OPENAI_DEFAULT_MODEL
+
+    async def is_available(self) -> tuple[bool, Optional[str]]:
+        if not self.api_key:
+            return False, "OPENAI_API_KEY not set."
+        return True, None
+
+    async def complete(self, req: ModelRequest, model: Optional[str] = None) -> ModelResponse:
+        if not self.api_key:
+            raise ModelUnavailableError("OPENAI_API_KEY not configured.", provider="openai")
+
+        target_model = model or self.default_model
+        start = time.perf_counter()
+        messages = []
+        if req.system_prompt:
+            messages.append({"role": "system", "content": req.system_prompt})
+        messages.append({"role": "user", "content": req.prompt})
+
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+                    json={"model": target_model, "messages": messages, "temperature": req.temperature, "max_tokens": req.max_tokens},
+                )
+                if resp.status_code == 429:
+                    raise QuotaExhaustedError("OpenAI quota exhausted.", provider="openai")
+                resp.raise_for_status()
+                data = resp.json()
+        except QuotaExhaustedError:
+            raise
+        except Exception as exc:
+            raise ModelUnavailableError(f"OpenAI error: {exc}", provider="openai")
+
+        latency = (time.perf_counter() - start) * 1000
+        content = data["choices"][0]["message"]["content"]
+        usage = data.get("usage", {})
+        return ModelResponse(
+            content=content, provider="openai", model=target_model,
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+            total_tokens=usage.get("total_tokens", 0),
+            latency_ms=latency, raw=data,
+        )
+
+
+class AnthropicAdapter:
+    def __init__(self):
+        self.api_key = settings.ANTHROPIC_API_KEY
+        self.default_model = settings.ANTHROPIC_DEFAULT_MODEL
+
+    async def is_available(self) -> tuple[bool, Optional[str]]:
+        if not self.api_key:
+            return False, "ANTHROPIC_API_KEY not set."
+        return True, None
+
+    async def complete(self, req: ModelRequest, model: Optional[str] = None) -> ModelResponse:
+        if not self.api_key:
+            raise ModelUnavailableError("ANTHROPIC_API_KEY not configured.", provider="anthropic")
+
+        target_model = model or self.default_model
+        start = time.perf_counter()
+
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                body: dict[str, Any] = {
+                    "model": target_model,
+                    "max_tokens": req.max_tokens,
+                    "messages": [{"role": "user", "content": req.prompt}],
+                }
+                if req.system_prompt:
+                    body["system"] = req.system_prompt
+
+                resp = await client.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "x-api-key": self.api_key,
+                        "anthropic-version": "2023-06-01",
+                        "Content-Type": "application/json",
+                    },
+                    json=body,
+                )
+                if resp.status_code == 529:
+                    raise QuotaExhaustedError("Anthropic overloaded.", provider="anthropic")
+                resp.raise_for_status()
+                data = resp.json()
+        except QuotaExhaustedError:
+            raise
+        except Exception as exc:
+            raise ModelUnavailableError(f"Anthropic error: {exc}", provider="anthropic")
+
+        latency = (time.perf_counter() - start) * 1000
+        content = data["content"][0]["text"]
+        usage = data.get("usage", {})
+        return ModelResponse(
+            content=content, provider="anthropic", model=target_model,
+            prompt_tokens=usage.get("input_tokens", 0),
+            completion_tokens=usage.get("output_tokens", 0),
+            total_tokens=usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
+            latency_ms=latency, raw=data,
+        )
+
+
+# ── Singleton adapters ────────────────────────────────────────────────────────
+_ollama = OllamaAdapter()
+_groq = GroqAdapter()
+_openai = OpenAIAdapter()
+_anthropic = AnthropicAdapter()
+
+_ADAPTERS = {
+    AIProvider.OLLAMA: _ollama,
+    AIProvider.GROQ: _groq,
+    AIProvider.OPENAI: _openai,
+    AIProvider.ANTHROPIC: _anthropic,
+}
+
+# Fallback chain: local first, then free cloud, then paid
+_FALLBACK_ORDER = [
+    AIProvider.OLLAMA,
+    AIProvider.GROQ,
+    AIProvider.OPENAI,
+    AIProvider.ANTHROPIC,
+]
+
+
+async def get_provider_statuses() -> list[ProviderStatus]:
+    """Return availability status for all configured providers (for the UI model settings page)."""
+    statuses = []
+    for provider, adapter in _ADAPTERS.items():
+        t0 = time.perf_counter()
+        available, error = await adapter.is_available()
+        latency = (time.perf_counter() - t0) * 1000
+        model = getattr(adapter, "default_model", "unknown")
+        statuses.append(ProviderStatus(
+            provider=provider.value,
+            model=model,
+            available=available,
+            error=error,
+            latency_ms=round(latency, 1) if available else None,
+        ))
+    return statuses
+
+
+async def complete(
+    req: ModelRequest,
+    preferred_provider: Optional[str] = None,
+    preferred_model: Optional[str] = None,
+) -> ModelResponse:
+    """
+    Route a completion request through the provider hierarchy.
+    Never returns a fake response. Raises ModelUnavailableError if all fail.
+    """
+    # Apply per-request overrides
+    if req.provider_override:
+        preferred_provider = req.provider_override
+    if req.model_override:
+        preferred_model = req.model_override
+
+    # Build ordered list starting with preferred
+    order = []
+    if preferred_provider:
+        try:
+            order.append(AIProvider(preferred_provider))
+        except ValueError:
+            log.warning("Unknown preferred provider", provider=preferred_provider)
+
+    for p in _FALLBACK_ORDER:
+        if p not in order:
+            order.append(p)
+
+    last_error: Optional[Exception] = None
+
+    for provider_enum in order:
+        adapter = _ADAPTERS.get(provider_enum)
+        if not adapter:
+            continue
+
+        available, unavail_reason = await adapter.is_available()
+        if not available:
+            log.debug("Provider not available, skipping", provider=provider_enum.value, reason=unavail_reason)
+            continue
+
+        try:
+            log.info("Calling AI provider", provider=provider_enum.value, model=preferred_model or getattr(adapter, "default_model", "?"))
+            result = await adapter.complete(req, model=preferred_model)
+            log.info(
+                "AI response received",
+                provider=result.provider,
+                model=result.model,
+                tokens=result.total_tokens,
+                latency_ms=round(result.latency_ms, 1),
+            )
+            return result
+        except QuotaExhaustedError as exc:
+            log.warning("Quota exhausted, falling back", provider=provider_enum.value, detail=str(exc))
+            last_error = exc
+            continue
+        except ModelUnavailableError as exc:
+            log.warning("Provider failed, falling back", provider=provider_enum.value, detail=str(exc))
+            last_error = exc
+            continue
+        except Exception as exc:
+            log.error("Unexpected AI error", provider=provider_enum.value, error=str(exc))
+            last_error = exc
+            continue
+
+    raise ModelUnavailableError(
+        "All AI providers are unavailable. "
+        "Please configure Ollama (local) or add a GROQ_API_KEY in Settings.",
+        details=str(last_error) if last_error else None,
+    )
+
+
+async def complete_json(
+    req: ModelRequest,
+    preferred_provider: Optional[str] = None,
+    preferred_model: Optional[str] = None,
+) -> dict:
+    """Complete and parse JSON response. Strips markdown fences if present."""
+    response = await complete(req, preferred_provider=preferred_provider, preferred_model=preferred_model)
+    text = response.content.strip()
+    # Strip ```json ... ``` or ``` ... ``` fences
+    if text.startswith("```"):
+        lines = text.split("\n")
+        lines = [l for l in lines if not l.strip().startswith("```")]
+        text = "\n".join(lines)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"AI response was not valid JSON: {exc}\nRaw content: {text[:500]}")

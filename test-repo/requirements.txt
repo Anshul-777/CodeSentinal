@@ -1,0 +1,35 @@
+# CodeSentinel Test Repository — Vulnerable Dependencies
+# These versions contain real CVEs that Agent 2 will detect via OSV.dev
+#
+# DO NOT use in production.
+
+# CVE-2023-30861 — Flask session cookie not secure by default
+Flask==2.0.1
+
+# CVE-2023-32681 — Proxy-Authorization header leaked on redirect
+requests==2.27.0
+
+# CVE-2020-14343 — yaml.load() full schema remote code execution
+PyYAML==5.3.1
+
+# CVE-2023-46136 — Werkzeug multipart DoS vulnerability  
+Werkzeug==2.0.1
+
+# CVE-2020-28493 — Jinja2 regular expression denial of service
+Jinja2==2.11.3
+
+# CVE-2022-24302 — Paramiko race condition on private key file creation
+paramiko==2.7.2
+
+# CVE-2021-25289 — Pillow buffer overflow via crafted TIFF file
+Pillow==8.1.0
+
+# CVE-2022-40897 — setuptools ReDoS on crafted package version
+setuptools==57.0.0
+
+# CVE-2022-42969 — py regex catastrophic backtracking
+py==1.9.0
+
+# No known CVE but high abandonment risk:
+# pycrypto — last commit 2015, superseded by pycryptodome
+pycrypto==2.6.1
