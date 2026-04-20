@@ -6,12 +6,15 @@ export interface User {
   job_title?: string
   company?: string
   github_username?: string
+  phone?: string
   avatar_url?: string
   is_test_user: boolean
   tour_completed: boolean
   tour_step: number
   notify_email: boolean
   notify_slack: boolean
+  notify_critical_only?: boolean
+  api_key_prefix?: string
   created_at: string
   organization?: Organization | null
 }
@@ -232,6 +235,9 @@ export interface AIProvider {
   error?: string
   latency_ms?: number
   configured: boolean
+  source?: 'provider' | 'personal' | 'none'
+  category?: 'provider_models' | 'personal_models'
+  priority_tag?: 'provider' | 'primary' | 'secondary'
   setup_url: string
   selected?: boolean
 }

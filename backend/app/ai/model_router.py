@@ -71,8 +71,46 @@ class ProviderStatus:
     provider: str
     model: str
     available: bool
+    source: str = "none"
     error: Optional[str] = None
     latency_ms: Optional[float] = None
+
+
+def _has_personal_cloud_key() -> bool:
+    return any([
+        bool(settings.GEMINI_API_KEY),
+        bool(settings.OPENROUTER_API_KEY),
+        bool(settings.GROQ_API_KEY),
+        bool(settings.OPENAI_API_KEY),
+        bool(settings.ANTHROPIC_API_KEY),
+    ])
+
+
+def _resolve_api_key(provider: AIProvider) -> tuple[Optional[str], str]:
+    personal = {
+        AIProvider.GROQ: settings.GROQ_API_KEY,
+        AIProvider.OPENAI: settings.OPENAI_API_KEY,
+        AIProvider.ANTHROPIC: settings.ANTHROPIC_API_KEY,
+        AIProvider.GEMINI: settings.GEMINI_API_KEY,
+        AIProvider.OPENROUTER: settings.OPENROUTER_API_KEY,
+    }
+    platform = {
+        AIProvider.GROQ: settings.PLATFORM_GROQ_API_KEY,
+        AIProvider.OPENAI: None,
+        AIProvider.ANTHROPIC: None,
+        AIProvider.GEMINI: settings.PLATFORM_GEMINI_API_KEY,
+        AIProvider.OPENROUTER: settings.PLATFORM_OPENROUTER_API_KEY,
+    }
+
+    personal_key = personal.get(provider)
+    if personal_key:
+        return personal_key, "personal"
+
+    platform_key = platform.get(provider)
+    if platform_key:
+        return platform_key, "provider"
+
+    return None, "none"
 
 
 class OllamaAdapter:
@@ -80,8 +118,11 @@ class OllamaAdapter:
 
     def __init__(self):
         self.base_url = settings.OLLAMA_BASE_URL
-        self.default_model = settings.OLLAMA_DEFAULT_MODEL
         self.timeout = settings.OLLAMA_TIMEOUT
+
+    @property
+    def default_model(self) -> str:
+        return settings.OLLAMA_DEFAULT_MODEL
 
     async def is_available(self) -> tuple[bool, Optional[str]]:
         try:
@@ -151,16 +192,24 @@ class GroqAdapter:
     """Groq free-tier adapter — fast inference on Llama/Mixtral models."""
 
     def __init__(self):
-        self.api_key = settings.GROQ_API_KEY
-        self.default_model = settings.GROQ_DEFAULT_MODEL
+        pass
+
+    @property
+    def default_model(self) -> str:
+        return settings.GROQ_DEFAULT_MODEL
+
+    def _get_api_key(self) -> tuple[Optional[str], str]:
+        return _resolve_api_key(AIProvider.GROQ)
 
     async def is_available(self) -> tuple[bool, Optional[str]]:
-        if not self.api_key:
+        api_key, _ = self._get_api_key()
+        if not api_key:
             return False, "GROQ_API_KEY not set. Register free at https://console.groq.com"
         return True, None
 
     async def complete(self, req: ModelRequest, model: Optional[str] = None) -> ModelResponse:
-        if not self.api_key:
+        api_key, _ = self._get_api_key()
+        if not api_key:
             raise ModelUnavailableError("GROQ_API_KEY not configured.", provider="groq")
 
         target_model = model or self.default_model
@@ -175,7 +224,7 @@ class GroqAdapter:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 resp = await client.post(
                     "https://api.groq.com/openai/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                     json={
                         "model": target_model,
                         "messages": messages,
@@ -210,16 +259,24 @@ class GroqAdapter:
 
 class OpenAIAdapter:
     def __init__(self):
-        self.api_key = settings.OPENAI_API_KEY
-        self.default_model = settings.OPENAI_DEFAULT_MODEL
+        pass
+
+    @property
+    def default_model(self) -> str:
+        return settings.OPENAI_DEFAULT_MODEL
+
+    def _get_api_key(self) -> tuple[Optional[str], str]:
+        return _resolve_api_key(AIProvider.OPENAI)
 
     async def is_available(self) -> tuple[bool, Optional[str]]:
-        if not self.api_key:
+        api_key, _ = self._get_api_key()
+        if not api_key:
             return False, "OPENAI_API_KEY not set."
         return True, None
 
     async def complete(self, req: ModelRequest, model: Optional[str] = None) -> ModelResponse:
-        if not self.api_key:
+        api_key, _ = self._get_api_key()
+        if not api_key:
             raise ModelUnavailableError("OPENAI_API_KEY not configured.", provider="openai")
 
         target_model = model or self.default_model
@@ -233,7 +290,7 @@ class OpenAIAdapter:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 resp = await client.post(
                     "https://api.openai.com/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                     json={"model": target_model, "messages": messages, "temperature": req.temperature, "max_tokens": req.max_tokens},
                 )
                 if resp.status_code == 429:
@@ -259,16 +316,24 @@ class OpenAIAdapter:
 
 class AnthropicAdapter:
     def __init__(self):
-        self.api_key = settings.ANTHROPIC_API_KEY
-        self.default_model = settings.ANTHROPIC_DEFAULT_MODEL
+        pass
+
+    @property
+    def default_model(self) -> str:
+        return settings.ANTHROPIC_DEFAULT_MODEL
+
+    def _get_api_key(self) -> tuple[Optional[str], str]:
+        return _resolve_api_key(AIProvider.ANTHROPIC)
 
     async def is_available(self) -> tuple[bool, Optional[str]]:
-        if not self.api_key:
+        api_key, _ = self._get_api_key()
+        if not api_key:
             return False, "ANTHROPIC_API_KEY not set."
         return True, None
 
     async def complete(self, req: ModelRequest, model: Optional[str] = None) -> ModelResponse:
-        if not self.api_key:
+        api_key, _ = self._get_api_key()
+        if not api_key:
             raise ModelUnavailableError("ANTHROPIC_API_KEY not configured.", provider="anthropic")
 
         target_model = model or self.default_model
@@ -287,7 +352,7 @@ class AnthropicAdapter:
                 resp = await client.post(
                     "https://api.anthropic.com/v1/messages",
                     headers={
-                        "x-api-key": self.api_key,
+                        "x-api-key": api_key,
                         "anthropic-version": "2023-06-01",
                         "Content-Type": "application/json",
                     },
@@ -318,16 +383,24 @@ class GeminiAdapter:
     """Google Gemini adapter via Generative Language REST API."""
 
     def __init__(self):
-        self.api_key = settings.GEMINI_API_KEY
-        self.default_model = settings.GEMINI_DEFAULT_MODEL
+        pass
+
+    @property
+    def default_model(self) -> str:
+        return settings.GEMINI_DEFAULT_MODEL
+
+    def _get_api_key(self) -> tuple[Optional[str], str]:
+        return _resolve_api_key(AIProvider.GEMINI)
 
     async def is_available(self) -> tuple[bool, Optional[str]]:
-        if not self.api_key:
+        api_key, _ = self._get_api_key()
+        if not api_key:
             return False, "GEMINI_API_KEY not set."
         return True, None
 
     async def complete(self, req: ModelRequest, model: Optional[str] = None) -> ModelResponse:
-        if not self.api_key:
+        api_key, _ = self._get_api_key()
+        if not api_key:
             raise ModelUnavailableError("GEMINI_API_KEY not configured.", provider="gemini")
 
         target_model = model or self.default_model
@@ -341,7 +414,7 @@ class GeminiAdapter:
 
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent"
-            f"?key={self.api_key}"
+            f"?key={api_key}"
         )
 
         try:
@@ -394,16 +467,24 @@ class OpenRouterAdapter:
     """OpenRouter adapter via OpenAI-compatible chat endpoint."""
 
     def __init__(self):
-        self.api_key = settings.OPENROUTER_API_KEY
-        self.default_model = settings.OPENROUTER_DEFAULT_MODEL
+        pass
+
+    @property
+    def default_model(self) -> str:
+        return settings.OPENROUTER_DEFAULT_MODEL
+
+    def _get_api_key(self) -> tuple[Optional[str], str]:
+        return _resolve_api_key(AIProvider.OPENROUTER)
 
     async def is_available(self) -> tuple[bool, Optional[str]]:
-        if not self.api_key:
+        api_key, _ = self._get_api_key()
+        if not api_key:
             return False, "OPENROUTER_API_KEY not set."
         return True, None
 
     async def complete(self, req: ModelRequest, model: Optional[str] = None) -> ModelResponse:
-        if not self.api_key:
+        api_key, _ = self._get_api_key()
+        if not api_key:
             raise ModelUnavailableError("OPENROUTER_API_KEY not configured.", provider="openrouter")
 
         target_model = model or self.default_model
@@ -419,7 +500,7 @@ class OpenRouterAdapter:
                 resp = await client.post(
                     "https://openrouter.ai/api/v1/chat/completions",
                     headers={
-                        "Authorization": f"Bearer {self.api_key}",
+                        "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",
                         "HTTP-Referer": "https://codesentinel.dev",
                         "X-Title": "CodeSentinel",
@@ -475,10 +556,10 @@ _ADAPTERS = {
 
 # Fallback chain: local first, then free cloud, then paid
 _FALLBACK_ORDER = [
-    AIProvider.OLLAMA,
-    AIProvider.GROQ,
     AIProvider.GEMINI,
     AIProvider.OPENROUTER,
+    AIProvider.GROQ,
+    AIProvider.OLLAMA,
     AIProvider.OPENAI,
     AIProvider.ANTHROPIC,
 ]
@@ -492,10 +573,14 @@ async def get_provider_statuses() -> list[ProviderStatus]:
         available, error = await adapter.is_available()
         latency = (time.perf_counter() - t0) * 1000
         model = getattr(adapter, "default_model", "unknown")
+        source = "provider"
+        if provider in {AIProvider.GROQ, AIProvider.OPENAI, AIProvider.ANTHROPIC, AIProvider.GEMINI, AIProvider.OPENROUTER}:
+            _, source = _resolve_api_key(provider)
         statuses.append(ProviderStatus(
             provider=provider.value,
             model=model,
             available=available,
+            source=source,
             error=error,
             latency_ms=round(latency, 1) if available else None,
         ))
@@ -531,10 +616,18 @@ async def complete(
 
     last_error: Optional[Exception] = None
 
+    personal_mode = _has_personal_cloud_key()
+
     for provider_enum in order:
         adapter = _ADAPTERS.get(provider_enum)
         if not adapter:
             continue
+
+        if personal_mode and provider_enum != AIProvider.OLLAMA:
+            _, source = _resolve_api_key(provider_enum)
+            if source != "personal":
+                log.debug("Skipping provider defaults because personal mode is active", provider=provider_enum.value)
+                continue
 
         available, unavail_reason = await adapter.is_available()
         if not available:
@@ -543,7 +636,8 @@ async def complete(
 
         try:
             log.info("Calling AI provider", provider=provider_enum.value, model=preferred_model or getattr(adapter, "default_model", "?"))
-            result = await adapter.complete(req, model=preferred_model)
+            model_override = preferred_model if preferred_provider == provider_enum.value else None
+            result = await adapter.complete(req, model=model_override)
             log.info(
                 "AI response received",
                 provider=result.provider,
@@ -567,7 +661,7 @@ async def complete(
 
     raise ModelUnavailableError(
         "All AI providers are unavailable. "
-        "Please configure Ollama (local) or add GROQ/GEMINI/OPENROUTER keys in Settings.",
+        "Please configure at least one Personal Model key, or switch to Provider Models defaults.",
         details=str(last_error) if last_error else None,
     )
 

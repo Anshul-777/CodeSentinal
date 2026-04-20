@@ -3,6 +3,8 @@ CodeSentinel — Celery Application
 """
 from __future__ import annotations
 
+from ssl import CERT_REQUIRED
+
 from celery import Celery
 from celery.schedules import crontab
 from kombu import Exchange, Queue
@@ -23,7 +25,7 @@ def _normalize_rediss_url(url: str) -> str:
 
     query = dict(parse_qsl(parts.query, keep_blank_values=True))
     if "ssl_cert_reqs" not in query:
-        query["ssl_cert_reqs"] = "required"
+        query["ssl_cert_reqs"] = "CERT_REQUIRED"
         return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
     return url
 
@@ -62,6 +64,8 @@ celery_app.conf.update(
     task_soft_time_limit=600,
     task_time_limit=900,
     worker_concurrency=4,
+    broker_use_ssl={"ssl_cert_reqs": CERT_REQUIRED},
+    redis_backend_use_ssl={"ssl_cert_reqs": CERT_REQUIRED},
     beat_schedule={
         "cleanup-old-scan-jobs": {
             "task": "app.tasks.scan_tasks.cleanup_old_jobs",

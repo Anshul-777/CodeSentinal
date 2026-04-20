@@ -43,7 +43,7 @@ async def github_webhook(
         log.warning(
             "GitHub webhook signature validation failed",
             delivery=x_github_delivery,
-            event=x_github_event,
+            github_event=x_github_event,
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -59,7 +59,7 @@ async def github_webhook(
 
     log.info(
         "GitHub webhook received",
-        event=x_github_event,
+        github_event=x_github_event,
         delivery=x_github_delivery,
         action=payload.get("action"),
     )

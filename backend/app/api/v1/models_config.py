@@ -62,7 +62,7 @@ class ModelPreferenceRequest(BaseModel):
 class TestPromptRequest(BaseModel):
     provider: str
     model: Optional[str] = None
-    prompt: str = "Say 'CodeSentinel AI test successful' and nothing else."
+    prompt: str = "Hello, The Model is active"
 
 
 class ConfigureProviderRequest(BaseModel):
@@ -91,11 +91,15 @@ async def list_providers(
             preferred_model = org.ai_model_preference
 
     providers = []
+    priority_order = ["gemini", "openrouter", "groq", "ollama", "openai", "anthropic"]
+    personal_candidates: list[dict] = []
+    provider_candidates: list[dict] = []
+
     for ps in statuses:
         meta = _provider_meta(ps.provider)
         models = PROVIDER_MODELS.get(ps.provider, [ps.model])
         effective_model = preferred_model if preferred_provider == ps.provider and preferred_model else ps.model
-        providers.append({
+        provider_data = {
             "id": ps.provider,
             "name": meta["name"],
             "description": meta["description"],
@@ -108,11 +112,38 @@ async def list_providers(
             "error": ps.error,
             "latency_ms": ps.latency_ms,
             "configured": _is_configured(ps.provider),
+            "source": ps.source,
             "setup_url": meta["setup_url"],
             "selected": preferred_provider == ps.provider,
-        })
+        }
+        providers.append(provider_data)
 
-    return {"providers": providers}
+        if ps.source == "personal":
+            personal_candidates.append(provider_data)
+        else:
+            provider_candidates.append(provider_data)
+
+    def rank(provider_id: str) -> int:
+        return priority_order.index(provider_id) if provider_id in priority_order else 999
+
+    personal_candidates.sort(key=lambda p: rank(p["id"]))
+
+    for idx, item in enumerate(personal_candidates):
+        item["category"] = "personal_models"
+        item["priority_tag"] = "primary" if idx == 0 else "secondary"
+
+    for item in provider_candidates:
+        item["category"] = "provider_models"
+        item["priority_tag"] = "provider"
+
+    providers.sort(key=lambda p: rank(p["id"]))
+
+    return {
+        "providers": providers,
+        "provider_models": sorted(provider_candidates, key=lambda p: rank(p["id"])),
+        "personal_models": personal_candidates,
+        "active_mode": "personal" if personal_candidates else "provider",
+    }
 
 
 @router.post("/models/test")
@@ -125,7 +156,7 @@ async def test_provider(
 
     req = ModelRequest(
         prompt=payload.prompt,
-        system_prompt="You are a test assistant. Respond with exactly what is asked.",
+        system_prompt="You are a test assistant. Respond with exactly the requested sentence and no extra words.",
         temperature=0.0,
         max_tokens=50,
         provider_override=payload.provider,
@@ -265,11 +296,11 @@ def _is_configured(provider: str) -> bool:
     from app.core.config import settings
     mapping = {
         "ollama": True,  # Always potentially available (local)
-        "groq": bool(settings.GROQ_API_KEY),
+        "groq": bool(settings.GROQ_API_KEY or settings.PLATFORM_GROQ_API_KEY),
         "openai": bool(settings.OPENAI_API_KEY),
         "anthropic": bool(settings.ANTHROPIC_API_KEY),
-        "gemini": bool(settings.GEMINI_API_KEY),
-        "openrouter": bool(settings.OPENROUTER_API_KEY),
+        "gemini": bool(settings.GEMINI_API_KEY or settings.PLATFORM_GEMINI_API_KEY),
+        "openrouter": bool(settings.OPENROUTER_API_KEY or settings.PLATFORM_OPENROUTER_API_KEY),
     }
     return mapping.get(provider, False)
 

@@ -89,6 +89,11 @@ class Settings(BaseSettings):
     OPENROUTER_API_KEY: Optional[str] = None
     OPENROUTER_DEFAULT_MODEL: str = "meta-llama/llama-3.1-8b-instruct:free"
 
+    # ── Platform Provider Keys (shared defaults) ──────────────────
+    PLATFORM_GEMINI_API_KEY: Optional[str] = None
+    PLATFORM_OPENROUTER_API_KEY: Optional[str] = None
+    PLATFORM_GROQ_API_KEY: Optional[str] = None
+
     # ── Notifications ──────────────────────────────────────────────
     SLACK_BOT_TOKEN: Optional[str] = None
     SLACK_DEFAULT_CHANNEL: str = "#security-alerts"

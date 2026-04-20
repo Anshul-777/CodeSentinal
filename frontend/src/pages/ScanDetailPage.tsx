@@ -87,7 +87,10 @@ export default function ScanDetailPage() {
   const { data: scan, isLoading } = useQuery({
     queryKey: ['scan', scanId],
     queryFn: () => apiClient.get(`/scans/${scanId}`).then((r) => r.data as Scan),
-    refetchInterval: (data) => (!data || ['queued', 'running'].includes(data.status)) ? 3000 : false,
+    refetchInterval: (query) => {
+      const data = query.state.data
+      return (!data || ['queued', 'running'].includes(data.status)) ? 3000 : false
+    },
   })
 
   const { data: findingsData } = useQuery({
