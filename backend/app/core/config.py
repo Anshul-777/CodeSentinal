@@ -115,9 +115,17 @@ class Settings(BaseSettings):
 
     @property
     def github_app_pem(self) -> Optional[str]:
-        if self.GITHUB_APP_PRIVATE_KEY:
-            return self.GITHUB_APP_PRIVATE_KEY.replace("\\n", "\n")
-        return None
+        if not self.GITHUB_APP_PRIVATE_KEY:
+            return None
+        key = self.GITHUB_APP_PRIVATE_KEY.replace("\\n", "\n")
+        # If the key doesn't have PEM headers, add them
+        if "-----BEGIN" not in key:
+            # Strip any whitespace and rejoin as proper PEM
+            raw = key.replace("\n", "").replace("\r", "").replace(" ", "")
+            # Split into 64-char lines (PEM standard)
+            lines = [raw[i:i+64] for i in range(0, len(raw), 64)]
+            key = "-----BEGIN RSA PRIVATE KEY-----\n" + "\n".join(lines) + "\n-----END RSA PRIVATE KEY-----\n"
+        return key
 
     @property
     def github_configured(self) -> bool:

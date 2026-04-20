@@ -89,6 +89,71 @@ Legend:
     - Callback URL must point to production frontend
     Status: Pending — will address after registration works.
 
+=== GitHub OAuth Integration Testing (2026-04-20) ===
+
+[*] User Registration Flow Complete ✅
+    - Account created successfully with email/password
+    - Organization and workspace auto-created
+    - User can login to frontend
+
+[*] GitHub OAuth Authorization Flow Testing ✅
+    - User clicked "Connect GitHub" button on Repositories page
+    - Frontend successfully redirected to GitHub authorization page
+    - User authenticated via passkey (already logged into GitHub account)
+    - User authorized app permissions (read code, write checks, PR reviews)
+    - GitHub began callback process
+    
+[] GitHub OAuth Callback Issue — Redirect to Localhost ❌
+    - After authorization, GitHub redirected to callback URL
+    - Callback URL currently points to http://localhost:5173/app/repositories (development setting)
+    - Live app received "localhost refused to connect" error
+    - Root Cause: GitHub App settings in Developer Console still configured for local development
+    - Why Connect Button Worked: OAuth initiation only requires app ID; callback requires correct URL config
+    - Solution: Update GitHub App settings to production URLs (see Issue 3 below)
+
+[*] GitHub OAuth Callback Now Redirects to Production ✅
+    - GitHub Developer Settings updated successfully
+    - GitHub now redirects to https://code-sentinal-chi.vercel.app/app/repositories?installation_id=...
+    - Frontend receives the callback correctly
+    
+[*] Issue 4: Vercel SPA Routing Configuration Missing — 404 on Callback ✅ FIXED
+    - GitHub callback reached production URL correctly
+    - But page returned 404: NOT_FOUND error
+    - Root Cause: Vercel was missing SPA routing configuration
+    - Vercel tried to find `/app/repositories` as a physical file instead of serving index.html
+    - Fix: Created vercel.json in frontend root with rewrite rule for SPA routing
+    - Implementation: Committed to main and pushed to GitHub
+    - Deploy Status: Vercel auto-deploy triggered (typically completes in 2-5 minutes)
+    - Next Test: Wait for Vercel deployment to complete, then click "Connect GitHub" again
+    - Expected Result: OAuth callback should now complete successfully without 404
+
+[] Issue 3: GitHub App Settings — Production URL Configuration Required
+    Settings location: https://github.com/settings/apps/codesentinel-devsecops
+    
+    Current (Development) → Required (Production):
+    
+    1. Homepage URL
+       http://localhost:5173 → https://code-sentinal-chi.vercel.app
+       Location: Basic information section
+    
+    2. Callback URL (OAuth Redirect)
+       http://localhost:5173/app/repositories → https://code-sentinal-chi.vercel.app/app/repositories
+       Location: Identifying and authorizing users section
+       CRITICAL: This is why callback failed
+    
+    3. Setup URL (Post-Installation Redirect)
+       http://localhost:5173/app/repositories → https://code-sentinal-chi.vercel.app/app/repositories
+       Location: Post installation section
+    
+    4. Webhook URL (Repository Events)
+       https://example.com/webhooks/github → https://codesentinal-ty40.onrender.com/webhooks/github
+       Location: Webhook section
+       Status: Active ✅
+    
+    Implementation: No credential changes required on Render/Railway.
+                    Only GitHub App settings in Developer Console need updating.
+    Status: Awaiting user approval before updating.
+
 Notes
 - Secrets are intentionally not printed in this file for safety.
 - Keep this file updated as each step completes to avoid repeated work/credit usage.

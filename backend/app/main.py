@@ -54,6 +54,18 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+
+# Global exception handler — ensures unhandled errors return proper JSON
+# so CORS middleware can add headers (raw exceptions bypass CORS)
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    from fastapi.responses import JSONResponse
+    structlog.get_logger("app").error("Unhandled error", path=request.url.path, error=str(exc))
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error. Check backend logs for details."},
+    )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
