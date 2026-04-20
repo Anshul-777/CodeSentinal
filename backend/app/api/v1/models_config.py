@@ -4,6 +4,8 @@ Let users view/switch AI providers, check availability, test connections.
 """
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Optional
 
 import structlog
@@ -30,6 +32,11 @@ class TestPromptRequest(BaseModel):
     provider: str
     model: Optional[str] = None
     prompt: str = "Say 'CodeSentinel AI test successful' and nothing else."
+
+
+class ConfigureProviderRequest(BaseModel):
+    provider: str
+    api_key: str
 
 
 @router.get("/models/providers")
@@ -117,6 +124,47 @@ async def set_model_preference(
     return {"provider": payload.provider, "model": payload.model, "message": "Preference saved."}
 
 
+@router.post("/models/configure")
+async def configure_provider_key(
+    payload: ConfigureProviderRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Store/clear provider API key in env and apply it immediately for this process."""
+    provider_env_map = {
+        "groq": "GROQ_API_KEY",
+        "openai": "OPENAI_API_KEY",
+        "anthropic": "ANTHROPIC_API_KEY",
+        "gemini": "GEMINI_API_KEY",
+        "openrouter": "OPENROUTER_API_KEY",
+    }
+
+    provider = payload.provider.strip().lower()
+    env_key = provider_env_map.get(provider)
+    if not env_key:
+        raise HTTPException(status_code=400, detail="Provider does not require API key configuration.")
+
+    raw_value = (payload.api_key or "").strip()
+    cleared = raw_value == "" or raw_value.upper() == "NONE"
+    value = "" if cleared else raw_value
+
+    # Persist in backend/.env (mounted to /app/.env in docker and used locally in backend/).
+    _upsert_env_var(Path(".env"), env_key, value)
+
+    # Apply immediately in-process so no restart is required.
+    if value:
+        os.environ[env_key] = value
+    else:
+        os.environ.pop(env_key, None)
+    from app.core.config import settings
+    setattr(settings, env_key, value or None)
+
+    return {
+        "provider": provider,
+        "configured": bool(value),
+        "message": "API key saved." if value else "API key cleared.",
+    }
+
+
 def _provider_meta(provider: str) -> dict:
     meta = {
         "ollama": {
@@ -176,3 +224,22 @@ def _is_configured(provider: str) -> bool:
         "openrouter": bool(settings.OPENROUTER_API_KEY),
     }
     return mapping.get(provider, False)
+
+
+def _upsert_env_var(env_path: Path, key: str, value: str) -> None:
+    lines: list[str] = []
+    if env_path.exists():
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+
+    replaced = False
+    prefix = f"{key}="
+    for i, line in enumerate(lines):
+        if line.startswith(prefix):
+            lines[i] = f"{key}={value}"
+            replaced = True
+            break
+
+    if not replaced:
+        lines.append(f"{key}={value}")
+
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")

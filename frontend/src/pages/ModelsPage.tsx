@@ -1,7 +1,7 @@
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { useState } from 'react'
 import { motion } from 'framer-motion'
-import { Cpu, CheckCircle, XCircle, Loader2, ExternalLink, Zap, AlertTriangle } from 'lucide-react'
+import { CheckCircle, XCircle, Loader2, ExternalLink, Zap, KeyRound, X } from 'lucide-react'
 import apiClient from '@/api/client'
 import type { AIProvider } from '@/types'
 import toast from 'react-hot-toast'
@@ -10,8 +10,11 @@ import clsx from 'clsx'
 export default function ModelsPage() {
   const [testResults, setTestResults] = useState<Record<string, any>>({})
   const [testing, setTesting] = useState<string | null>(null)
+  const [configProvider, setConfigProvider] = useState<AIProvider | null>(null)
+  const [pendingAction, setPendingAction] = useState<'test' | 'default' | null>(null)
+  const [apiKeyInput, setApiKeyInput] = useState('')
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, refetch } = useQuery({
     queryKey: ['ai-providers'],
     queryFn: () => apiClient.get('/models/providers').then(r => r.data),
     refetchInterval: 30000,
@@ -33,6 +36,49 @@ export default function ModelsPage() {
     mutationFn: (p: { provider: string }) => apiClient.patch('/models/preference', p),
     onSuccess: () => toast.success('Default provider updated'),
   })
+
+  const configureMutation = useMutation({
+    mutationFn: (p: { provider: string; api_key: string }) => apiClient.post('/models/configure', p),
+    onSuccess: async () => {
+      toast.success('API key saved')
+      await refetch()
+      if (!configProvider || !pendingAction) return
+      const provider = configProvider
+      const action = pendingAction
+      setConfigProvider(null)
+      setPendingAction(null)
+      setApiKeyInput('')
+      if (action === 'test') await testProvider(provider)
+      else preferMutation.mutate({ provider: provider.id })
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.detail || 'Failed to save API key')
+    },
+  })
+
+  const needsKey = (p: AIProvider) => p.id !== 'ollama' && !p.configured
+
+  const beginAction = async (provider: AIProvider, action: 'test' | 'default') => {
+    if (needsKey(provider)) {
+      setConfigProvider(provider)
+      setPendingAction(action)
+      return
+    }
+    if (action === 'test') {
+      await testProvider(provider)
+      return
+    }
+    preferMutation.mutate({ provider: provider.id })
+  }
+
+  const saveApiKey = () => {
+    if (!configProvider) return
+    if (!apiKeyInput.trim()) {
+      toast.error('Enter an API key (or NONE to clear).')
+      return
+    }
+    configureMutation.mutate({ provider: configProvider.id, api_key: apiKeyInput.trim() })
+  }
 
   const typeLabels: Record<string, { label: string; cls: string }> = {
     local: { label: 'Local — Free', cls: 'bg-green-100 text-green-800 border border-green-200' },
@@ -71,17 +117,66 @@ export default function ModelsPage() {
                   {tr.success ? `✓ ${tr.content?.slice(0,80)} (${tr.latency_ms}ms)` : `✗ ${tr.message?.slice(0,100)}`}
                 </div>}
                 <div className="flex gap-2">
-                  <button onClick={() => testProvider(p)} disabled={testing===p.id} className="btn-secondary flex-1 justify-center text-sm">
+                  <button onClick={() => beginAction(p, 'test')} disabled={testing===p.id} className="btn-secondary flex-1 justify-center text-sm">
                     {testing===p.id ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : <Zap className="w-3.5 h-3.5"/>}Test
                   </button>
-                  <button onClick={() => preferMutation.mutate({provider:p.id})} className="btn-primary flex-1 justify-center text-sm">
+                  <button onClick={() => beginAction(p, 'default')} className="btn-primary flex-1 justify-center text-sm">
                     Set default
                   </button>
-                  {!p.configured && <a href={p.setup_url} target="_blank" rel="noopener noreferrer" className="btn-secondary px-3"><ExternalLink className="w-3.5 h-3.5"/></a>}
+                  {!p.configured && p.id !== 'ollama' && (
+                    <button onClick={() => { setConfigProvider(p); setPendingAction(null) }} className="btn-secondary px-3" title="Configure API key">
+                      <KeyRound className="w-3.5 h-3.5"/>
+                    </button>
+                  )}
+                  {!p.configured && (
+                    <a href={p.setup_url} target="_blank" rel="noopener noreferrer" className="btn-secondary px-3"><ExternalLink className="w-3.5 h-3.5"/></a>
+                  )}
                 </div>
               </motion.div>
             )
           })}
+        </div>
+      )}
+
+      {configProvider && (
+        <div className="fixed inset-0 z-50 bg-black/35 flex items-center justify-center p-4">
+          <div className="w-full max-w-lg bg-white rounded-2xl border border-gray-200 shadow-xl">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+              <div>
+                <h3 className="text-base font-semibold text-gray-900">Configure {configProvider.name} API key</h3>
+                <p className="text-xs text-gray-500 mt-0.5">Paste key to continue. Use <span className="font-mono">NONE</span> to clear.</p>
+              </div>
+              <button
+                onClick={() => { setConfigProvider(null); setPendingAction(null); setApiKeyInput('') }}
+                className="p-1.5 rounded-lg hover:bg-gray-100"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-3">
+              <input
+                type="password"
+                placeholder="Enter API key"
+                value={apiKeyInput}
+                onChange={(e) => setApiKeyInput(e.target.value)}
+                className="input"
+              />
+              <div className="text-xs text-gray-500">
+                Need a key? <a className="text-sentinel-600 hover:underline" href={configProvider.setup_url} target="_blank" rel="noreferrer">Open provider setup</a>
+              </div>
+            </div>
+            <div className="px-5 py-4 border-t border-gray-100 flex justify-end gap-2">
+              <button
+                onClick={() => { setConfigProvider(null); setPendingAction(null); setApiKeyInput('') }}
+                className="btn-secondary"
+              >
+                Cancel
+              </button>
+              <button onClick={saveApiKey} className="btn-primary" disabled={configureMutation.isPending}>
+                {configureMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Save key'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

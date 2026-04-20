@@ -153,7 +153,7 @@ export default function AppShell() {
       {/* Desktop sidebar */}
       <aside
         className={clsx(
-          'hidden lg:flex flex-col bg-white border-r border-gray-200 flex-shrink-0 transition-all duration-300',
+          'hidden lg:flex flex-col bg-white border-r border-gray-200 flex-shrink-0 transition-all duration-300 relative',
           collapsed ? 'w-[60px]' : 'w-[220px]'
         )}
       >
@@ -161,8 +161,7 @@ export default function AppShell() {
         {/* Collapse toggle */}
         <button
           onClick={() => setCollapsed(!collapsed)}
-          className="absolute left-0 top-1/2 -translate-y-1/2 translate-x-[208px] w-5 h-5 bg-white border border-gray-200 rounded-full flex items-center justify-center shadow-sm hover:shadow-md transition-all z-10"
-          style={{ left: collapsed ? '48px' : '208px' }}
+          className="absolute -right-2.5 top-1/2 -translate-y-1/2 w-5 h-5 bg-white border border-gray-200 rounded-full flex items-center justify-center shadow-sm hover:shadow-md transition-all z-10"
         >
           {collapsed ? <ChevronRight className="w-3 h-3" /> : <ChevronLeft className="w-3 h-3" />}
         </button>
