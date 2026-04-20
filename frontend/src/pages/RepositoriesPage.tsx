@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
   GitBranch, Github, Plus, AlertCircle, CheckCircle, Shield,
@@ -11,7 +12,7 @@ import { useAuthStore } from '@/store/authStore'
 import type { Repository } from '@/types'
 import { format, parseISO } from 'date-fns'
 import toast from 'react-hot-toast'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 
 function RiskPill({ score }: { score?: number }) {
@@ -33,6 +34,9 @@ export default function RepositoriesPage() {
   const qc = useQueryClient()
   const { user } = useAuthStore()
   const [showGHConnect, setShowGHConnect] = useState(false)
+  const [manualInstallationId, setManualInstallationId] = useState('')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const processedInstallationRef = useRef<string | null>(null)
 
   const { data, isLoading } = useQuery({
     queryKey: ['repos'],
@@ -41,6 +45,45 @@ export default function RepositoriesPage() {
 
   const repos: Repository[] = data?.repositories || []
   const total: number = data?.total || 0
+
+  const connectMutation = useMutation({
+    mutationFn: (installationId: string) =>
+      apiClient.post('/repos/connect-github', { installation_id: installationId, provider: 'github' }),
+    onSuccess: (res) => {
+      const connected = res?.data?.connected ?? 0
+      toast.success(`GitHub connected. Imported ${connected} repositories.`)
+      qc.invalidateQueries({ queryKey: ['repos'] })
+      setShowGHConnect(false)
+      setManualInstallationId('')
+    },
+    onError: (e: any) => {
+      toast.error(e?.response?.data?.detail || 'Could not complete GitHub connection')
+    },
+  })
+
+  useEffect(() => {
+    const installationId = searchParams.get('installation_id')
+    if (!installationId) return
+    if (processedInstallationRef.current === installationId) return
+
+    processedInstallationRef.current = installationId
+    connectMutation.mutate(installationId)
+
+    const next = new URLSearchParams(searchParams)
+    next.delete('installation_id')
+    next.delete('setup_action')
+    next.delete('state')
+    setSearchParams(next, { replace: true })
+  }, [searchParams, setSearchParams])
+
+  const onManualConnect = () => {
+    const installationId = manualInstallationId.trim()
+    if (!installationId) {
+      toast.error('Enter installation id first')
+      return
+    }
+    connectMutation.mutate(installationId)
+  }
 
   const ghAppUrl = `https://github.com/apps/${import.meta.env.VITE_GITHUB_APP_NAME || 'codesentinel'}/installations/new`
 
@@ -107,6 +150,21 @@ export default function RepositoriesPage() {
               <p className="text-xs text-gray-400">
                 After installing, repos will appear here within 30 seconds.
               </p>
+            </div>
+
+            <div className="mt-5 pt-5 border-t border-gray-200 max-w-md mx-auto text-left">
+              <p className="text-xs text-gray-500 mb-2">If redirect/callback is not configured yet, paste GitHub installation id manually:</p>
+              <div className="flex gap-2">
+                <input
+                  value={manualInstallationId}
+                  onChange={(e) => setManualInstallationId(e.target.value)}
+                  className="input text-sm"
+                  placeholder="e.g. 61401234"
+                />
+                <button onClick={onManualConnect} disabled={connectMutation.isPending} className="btn-secondary text-sm whitespace-nowrap">
+                  {connectMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Complete connect'}
+                </button>
+              </div>
             </div>
 
             {total > 0 && (
