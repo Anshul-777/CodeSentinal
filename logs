@@ -42,53 +42,52 @@ Legend:
     - Instance: codesentinel-redis
     - Region: Oregon
     - Internal URL: redis://red-d7j0tprbc2fs739c0pt0:6379
+[*] Upstash Redis created (shared broker for Render + Railway):
+    - Instance: codesentinel-shared-redis
+    - Region: Oregon, us-west-2
+    - URL: rediss://...@golden-firefly-102817.upstash.io:6379
 
-[] Remaining Render Steps (Do Next)
-[] Create Render Web Service (API) from this repo:
-    - Runtime: Docker
-    - Root directory: backend
-    - Dockerfile path: backend/Dockerfile
-[] Create Render Background Worker from this repo:
-    - Runtime: Docker
-    - Root directory: backend
-    - Dockerfile path: backend/Dockerfile.worker
+[*] API Web Service deployed and database connected ✅
+    - URL: https://codesentinal-ty40.onrender.com
+    - Health endpoint shows "database": "connected", "github_app": true
+    - Env vars corrected (DATABASE_URL hostname + GITHUB_WEBHOOK_URL)
 
-[] Required Render Env Vars (API and Worker)
-[] APP_ENV=production
-[] DEBUG=false
-[] FRONTEND_URL=<set temporary localhost now, replace with frontend domain later>
-[] ALLOWED_ORIGINS=["http://localhost:5173"] (temporary; replace with frontend domain later)
-[] SECRET_KEY=<production secret>
-[] JWT_SECRET_KEY=<production secret>
-[] ENCRYPTION_KEY=<fernet key>
-[] DATABASE_URL=postgresql+asyncpg://codesentinel_user:ZqrXa1IRhEvgxYSMJtgknltqAYV5svsf@dpg-d7j0ph7lklmc73a74ep0-a:5432/codesentinel_prod
-[] REDIS_URL=redis://red-d7j0tprbc2fs739c0pt0:6379/0
-[] CELERY_BROKER_URL=redis://red-d7j0tprbc2fs739c0pt0:6379/0
-[] CELERY_RESULT_BACKEND=redis://red-d7j0tprbc2fs739c0pt0:6379/1
-[] GITHUB_APP_ID=3440019
-[] GITHUB_APP_NAME=codesentinel-devsecops
-[] GITHUB_APP_PRIVATE_KEY=<full PEM private key>
-[] GITHUB_APP_WEBHOOK_SECRET=<already chosen secret>
-[] GITHUB_APP_CLIENT_ID=<already collected>
-[] GITHUB_APP_CLIENT_SECRET=<already collected>
-[] GITHUB_WEBHOOK_URL=https://<render-backend-domain>/webhooks/github
+[*] Frontend Deployment (Vercel)
+[*] Frontend deployed to Vercel at https://code-sentinal-chi.vercel.app
+[*] VITE_API_URL set to https://codesentinal-ty40.onrender.com/api/v1
+[*] FRONTEND_URL and ALLOWED_ORIGINS updated on Render backend
 
-[] Post-Deploy Verification Steps
-[] API health check: GET https://<render-backend-domain>/health should return healthy.
-[] Run migrations once on Render shell:
-    - alembic upgrade head
-[] Optional seed for test account on Render:
-    - python scripts/seed_test_account.py
-[] Update GitHub App webhook URL in GitHub settings to:
-    - https://<render-backend-domain>/webhooks/github
-[] Install GitHub App on target repository/account and verify webhook deliveries.
-[] Trigger test PR and confirm check run and scan workflow appear.
+[*] Railway Worker (Celery)
+[*] Railway celery worker deployed and connected to Upstash Redis
+[*] Worker confirmed consuming tasks
 
-[] Frontend Deployment (Later)
-[] Deploy frontend to Vercel.
-[] Set frontend env VITE_API_URL=https://<render-backend-domain>/api/v1
-[] Update backend FRONTEND_URL and ALLOWED_ORIGINS to Vercel URL.
-[] Re-test auth + repositories + GitHub connect flow end-to-end.
+=== Debugging Session (2026-04-20) ===
+
+[*] Issue 1: CORS Rejection — Registration Blocked
+    Root Cause: ALLOWED_ORIGINS env var is set as JSON array string:
+        '["https://code-sentinal-chi.vercel.app","http://localhost:5173"]'
+    But the parse_origins() validator in config.py split by comma,
+    producing broken values with square brackets and quotes:
+        ['["https://code-sentinal-chi.vercel.app"', '"http://localhost:5173"]']
+    FastAPI CORS middleware rejected all origins since none matched.
+    Fix: Updated parse_origins() to try json.loads() first for JSON arrays.
+    Commit: 20ffb7d pushed to main, Render auto-deployed.
+    Result: ✅ CORS fixed — requests now reach the backend (500 instead of CORS block).
+
+[*] Issue 2: Database Tables Do Not Exist — 500 on Registration
+    Error: asyncpg.exceptions.UndefinedTableError: relation "users" does not exist
+    Root Cause: Alembic migrations were NEVER run on the Render Postgres database.
+    The health check only runs SELECT 1 which works on an empty database.
+    The Dockerfile only starts uvicorn — no migration step.
+    Render Shell is paid — cannot run alembic upgrade head manually.
+    Fix: Create startup script (start.sh) that runs alembic upgrade head
+         before starting uvicorn. Update Dockerfile to use it.
+    Status: Implementing now.
+
+[] Issue 3: GitHub App settings need updating with production URLs
+    - Webhook URL must point to https://codesentinal-ty40.onrender.com/webhooks/github
+    - Callback URL must point to production frontend
+    Status: Pending — will address after registration works.
 
 Notes
 - Secrets are intentionally not printed in this file for safety.
