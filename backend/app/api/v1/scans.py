@@ -198,6 +198,50 @@ async def trigger_manual_scan(
     if not repo.scan_enabled:
         raise HTTPException(status_code=400, detail="Scanning is disabled for this repository.")
 
+    # Estimate queue delay for user feedback.
+    repo_ids_result = await db.execute(
+        select(Repository.id).where(Repository.organization_id == current_user.primary_org_id)
+    )
+    org_repo_ids = [str(r[0]) for r in repo_ids_result.fetchall()]
+
+    queued_count = 0
+    running_count = 0
+    avg_scan_seconds = 180
+    if org_repo_ids:
+        queued_count_r = await db.execute(
+            select(func.count(Scan.id)).where(
+                Scan.repository_id.in_(org_repo_ids),
+                Scan.status == "queued",
+            )
+        )
+        running_count_r = await db.execute(
+            select(func.count(Scan.id)).where(
+                Scan.repository_id.in_(org_repo_ids),
+                Scan.status == "running",
+            )
+        )
+        duration_avg_r = await db.execute(
+            select(func.avg(Scan.duration_seconds)).where(
+                Scan.repository_id.in_(org_repo_ids),
+                Scan.duration_seconds.isnot(None),
+                Scan.status.in_(["completed", "blocked"]),
+            )
+        )
+        queued_count = int(queued_count_r.scalar() or 0)
+        running_count = int(running_count_r.scalar() or 0)
+        avg_duration = duration_avg_r.scalar()
+        if avg_duration:
+            avg_scan_seconds = max(60, int(float(avg_duration)))
+
+    worker_slots = 4
+    available_slots = max(0, worker_slots - running_count)
+    if available_slots > 0:
+        estimated_wait_seconds = 5
+    else:
+        estimated_wait_seconds = int(((queued_count + 1) / worker_slots) * avg_scan_seconds)
+
+    estimated_total_seconds = estimated_wait_seconds + avg_scan_seconds
+
     scan_id = str(uuid.uuid4())
     scan = Scan(
         id=scan_id,
@@ -224,7 +268,16 @@ async def trigger_manual_scan(
     trigger_scan.delay(scan_id)
 
     log.info("Manual scan triggered", scan_id=scan_id, repo=repo.full_name, user=current_user.email)
-    return _scan_detail(scan)
+    response = _scan_detail(scan)
+    response.update(
+        {
+            "queue_position": queued_count + 1,
+            "estimated_wait_seconds": estimated_wait_seconds,
+            "estimated_total_seconds": estimated_total_seconds,
+            "estimated_avg_scan_seconds": avg_scan_seconds,
+        }
+    )
+    return response
 
 
 @router.delete("/scans/{scan_id}")

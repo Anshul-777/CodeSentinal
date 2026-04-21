@@ -168,10 +168,10 @@ export default function RepositoriesPage() {
         </div>
         <button
           onClick={() => setShowGHConnect(true)}
-          className="btn-primary text-sm"
+          className={clsx('text-sm', total > 0 ? 'btn-secondary' : 'btn-primary')}
         >
-          <Plus className="w-4 h-4" />
-          Connect GitHub
+          {total > 0 ? <CheckCircle className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+          {total > 0 ? 'GitHub Connected' : 'Connect GitHub'}
         </button>
       </div>
 

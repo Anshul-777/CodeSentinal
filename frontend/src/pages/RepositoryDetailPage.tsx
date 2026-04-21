@@ -32,8 +32,10 @@ export default function RepositoryDetailPage() {
   const triggerScan = async () => {
     setTriggerLoading(true)
     try {
-      await apiClient.post('/scans/manual', { repository_id: repoId, scope: 'full' })
-      toast.success('Manual scan queued — results will appear shortly.')
+      const { data } = await apiClient.post('/scans/manual', { repository_id: repoId, scope: 'full' })
+      const wait = Math.max(0, Math.round((data?.estimated_wait_seconds || 0) / 60))
+      const total = Math.max(1, Math.round((data?.estimated_total_seconds || 0) / 60))
+      toast.success(`Manual scan queued. Estimated start in ~${wait} min, completion in ~${total} min.`)
       qc.invalidateQueries({ queryKey: ['repo-scans', repoId] })
     } catch (e: any) {
       toast.error(e.response?.data?.detail || 'Failed to trigger scan')
@@ -98,6 +100,8 @@ export default function RepositoryDetailPage() {
                 <span className="text-sm text-gray-700">{label}</span>
                 <button
                   onClick={() => configMutation.mutate({ [field]: !value })}
+                  title={`Toggle ${label}`}
+                  aria-label={`Toggle ${label}`}
                   className={clsx('relative w-10 h-5 rounded-full transition-colors', value ? 'bg-sentinel-600' : 'bg-gray-300')}
                 >
                   <span className={clsx('absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform shadow', value ? 'translate-x-5' : 'translate-x-0.5')} />

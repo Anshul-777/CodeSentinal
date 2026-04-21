@@ -8,6 +8,7 @@ export interface User {
   github_username?: string
   phone?: string
   avatar_url?: string
+  user_timezone?: string
   is_test_user: boolean
   tour_completed: boolean
   tour_step: number

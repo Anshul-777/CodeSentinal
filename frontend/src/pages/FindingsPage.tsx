@@ -35,13 +35,20 @@ export default function FindingsPage() {
   const [severity, setSeverity] = useState(searchParams.get('severity') || '')
   const [agentType, setAgentType] = useState(searchParams.get('agent_type') || '')
   const [status, setStatus] = useState(searchParams.get('status') || 'open')
+  const [repositoryId, setRepositoryId] = useState(searchParams.get('repository_id') || '')
   const [offset, setOffset] = useState(0)
   const limit = 50
 
+  const { data: reposData } = useQuery({
+    queryKey: ['repos'],
+    queryFn: () => apiClient.get('/repos').then((r) => r.data),
+  })
+  const repos = reposData?.repositories || []
+
   const { data, isLoading } = useQuery({
-    queryKey: ['findings', { search, severity, agentType, status, offset }],
+    queryKey: ['findings', { search, severity, agentType, status, repositoryId, offset }],
     queryFn: () => apiClient.get('/findings', {
-      params: { search: search || undefined, severity: severity || undefined, agent_type: agentType || undefined, status: status || undefined, limit, offset },
+      params: { search: search || undefined, severity: severity || undefined, agent_type: agentType || undefined, status: status || undefined, repository_id: repositoryId || undefined, limit, offset },
     }).then((r) => r.data),
   })
 
@@ -65,20 +72,24 @@ export default function FindingsPage() {
             <input value={search} onChange={(e) => { setSearch(e.target.value); setOffset(0) }}
               placeholder="Search title, file, description…" className="flex-1 text-sm outline-none text-gray-900 placeholder-gray-400" />
           </div>
-          <select value={severity} onChange={(e) => { setSeverity(e.target.value); setOffset(0) }} className="input w-auto text-sm">
+          <select value={severity} onChange={(e) => { setSeverity(e.target.value); setOffset(0) }} className="input w-auto text-sm" aria-label="Severity filter" title="Severity filter">
             <option value="">All severities</option>
             {SEVERITIES.map((s) => <option key={s} value={s} className="capitalize">{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
           </select>
-          <select value={agentType} onChange={(e) => { setAgentType(e.target.value); setOffset(0) }} className="input w-auto text-sm">
+          <select value={agentType} onChange={(e) => { setAgentType(e.target.value); setOffset(0) }} className="input w-auto text-sm" aria-label="Agent filter" title="Agent filter">
             <option value="">All agents</option>
             {AGENT_TYPES.map((a) => <option key={a} value={a}>{a.replace('_', ' ')}</option>)}
           </select>
-          <select value={status} onChange={(e) => { setStatus(e.target.value); setOffset(0) }} className="input w-auto text-sm">
+          <select value={status} onChange={(e) => { setStatus(e.target.value); setOffset(0) }} className="input w-auto text-sm" aria-label="Status filter" title="Status filter">
             <option value="">All statuses</option>
             {STATUSES.map((s) => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}
           </select>
+          <select value={repositoryId} onChange={(e) => { setRepositoryId(e.target.value); setOffset(0) }} className="input w-auto text-sm min-w-[240px]" aria-label="Repository filter" title="Repository filter">
+            <option value="">All repositories</option>
+            {repos.map((r: any) => <option key={r.id} value={r.id}>{r.full_name}</option>)}
+          </select>
           {(severity || agentType || search || status !== 'open') && (
-            <button onClick={() => { setSearch(''); setSeverity(''); setAgentType(''); setStatus('open'); setOffset(0) }}
+            <button onClick={() => { setSearch(''); setSeverity(''); setAgentType(''); setStatus('open'); setRepositoryId(''); setOffset(0) }}
               className="text-sm text-gray-500 hover:text-gray-900 underline">Clear filters</button>
           )}
         </div>

@@ -12,7 +12,7 @@ from typing import Optional
 import structlog
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -89,6 +89,11 @@ class TourUpdateRequest(BaseModel):
     tour_step: Optional[int] = None
 
 
+class DeleteAccountRequest(BaseModel):
+    confirm_email: EmailStr
+    password: str
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 def _user_to_dict(user: User, org: Optional[Organization] = None) -> dict:
     return {
@@ -98,12 +103,16 @@ def _user_to_dict(user: User, org: Optional[Organization] = None) -> dict:
         "job_title": user.job_title,
         "company": user.company,
         "github_username": user.github_username,
+        "phone": user.phone,
         "avatar_url": user.avatar_url,
+        "user_timezone": user.user_timezone,
         "is_test_user": user.is_test_user,
         "tour_completed": user.tour_completed,
         "tour_step": user.tour_step,
         "notify_email": user.notify_email,
         "notify_slack": user.notify_slack,
+        "notify_critical_only": user.notify_critical_only,
+        "api_key_prefix": user.api_key_prefix,
         "created_at": user.created_at.isoformat(),
         "organization": {
             "id": org.id,
@@ -410,3 +419,51 @@ async def generate_new_api_key(
         "prefix": prefix,
         "message": "Store this key now — it will not be shown again.",
     }
+
+
+@router.post("/auth/delete-account")
+async def delete_account(
+    payload: DeleteAccountRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Permanently delete the current account and owned tenant data."""
+    if payload.confirm_email.lower() != current_user.email.lower():
+        raise HTTPException(status_code=400, detail="Confirmation email does not match your account email.")
+
+    result = await db.execute(select(User).where(User.id == current_user.id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    if not verify_password(payload.password, user.hashed_password):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid password.")
+
+    # Remove organizations owned by this user (cascades repos/scans/findings/fixes/memberships).
+    owned_orgs_result = await db.execute(select(Organization.id).where(Organization.owner_id == user.id))
+    owned_org_ids = [str(row[0]) for row in owned_orgs_result.fetchall()]
+    if owned_org_ids:
+        await db.execute(delete(Organization).where(Organization.id.in_(owned_org_ids)))
+
+    # Remove memberships in other orgs, clear account-level external handles, then delete user.
+    await db.execute(delete(OrganizationMember).where(OrganizationMember.user_id == user.id))
+
+    user.github_username = None
+    user.avatar_url = None
+    user.api_key_hash = None
+    user.api_key_prefix = None
+    user.primary_org_id = None
+
+    await _record_audit(
+        db,
+        "user.deleted_account",
+        user,
+        request,
+        details={"owned_orgs_deleted": len(owned_org_ids)},
+    )
+
+    await db.delete(user)
+    await db.commit()
+
+    return {"message": "Account deleted permanently."}

@@ -9,12 +9,19 @@ import clsx from 'clsx'
 
 export default function ScansPage() {
   const [status, setStatus] = useState('')
+  const [repositoryId, setRepositoryId] = useState('')
   const [offset, setOffset] = useState(0)
   const limit = 25
 
+  const { data: reposData } = useQuery({
+    queryKey: ['repos'],
+    queryFn: () => apiClient.get('/repos').then(r => r.data),
+  })
+  const repos = reposData?.repositories || []
+
   const { data, isLoading } = useQuery({
-    queryKey: ['scans', { status, offset }],
-    queryFn: () => apiClient.get('/scans', { params: { status: status || undefined, limit, offset } }).then(r => r.data),
+    queryKey: ['scans', { status, repositoryId, offset }],
+    queryFn: () => apiClient.get('/scans', { params: { status: status || undefined, repository_id: repositoryId || undefined, limit, offset } }).then(r => r.data),
     refetchInterval: 10000,
   })
 
@@ -25,10 +32,22 @@ export default function ScansPage() {
     <div className="p-6 space-y-5 animate-fade-in">
       <div className="flex items-center justify-between">
         <div><h1 className="page-title">Scans</h1><p className="text-muted mt-1">{total} total scans</p></div>
-        <select value={status} onChange={e => setStatus(e.target.value)} className="input w-auto text-sm">
-          <option value="">All statuses</option>
-          {['queued','running','completed','blocked','failed','cancelled'].map(s => <option key={s} value={s} className="capitalize">{s}</option>)}
-        </select>
+        <div className="flex items-center gap-2">
+          <select
+            value={repositoryId}
+            onChange={e => { setRepositoryId(e.target.value); setOffset(0) }}
+            className="input w-auto text-sm"
+            aria-label="Repository filter"
+            title="Repository filter"
+          >
+            <option value="">All repositories</option>
+            {repos.map((r: any) => <option key={r.id} value={r.id}>{r.full_name}</option>)}
+          </select>
+          <select value={status} onChange={e => { setStatus(e.target.value); setOffset(0) }} className="input w-auto text-sm" aria-label="Status filter" title="Status filter">
+            <option value="">All statuses</option>
+            {['queued','running','completed','blocked','failed','cancelled'].map(s => <option key={s} value={s} className="capitalize">{s}</option>)}
+          </select>
+        </div>
       </div>
       <div className="card overflow-hidden">
         {isLoading ? <div className="p-12 text-center text-gray-400"><Loader2 className="w-6 h-6 animate-spin mx-auto" /></div> :

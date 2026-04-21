@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { CheckCircle, ArrowRight, Shield, Loader2 } from 'lucide-react'
+import { CheckCircle, ArrowRight } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { useState } from 'react'
 import apiClient from '@/api/client'
 import clsx from 'clsx'
 
@@ -13,13 +14,21 @@ const FRAMEWORKS = [
 ]
 
 export default function CompliancePage() {
+  const [repositoryId, setRepositoryId] = useState('')
+
+  const { data: reposData } = useQuery({
+    queryKey: ['repos'],
+    queryFn: () => apiClient.get('/repos').then(r => r.data),
+  })
+  const repos = reposData?.repositories || []
+
   const { data: summary } = useQuery({
-    queryKey: ['compliance-summary'],
-    queryFn: () => apiClient.get('/compliance/summary').then(r => r.data),
+    queryKey: ['compliance-summary', repositoryId],
+    queryFn: () => apiClient.get('/compliance/summary', { params: { repository_id: repositoryId || undefined } }).then(r => r.data),
   })
   const { data: findingsData } = useQuery({
-    queryKey: ['compliance-findings'],
-    queryFn: () => apiClient.get('/findings', { params: { agent_type: 'compliance', status: 'open', limit: 20 } }).then(r => r.data),
+    queryKey: ['compliance-findings', repositoryId],
+    queryFn: () => apiClient.get('/compliance/findings', { params: { repository_id: repositoryId || undefined, limit: 20 } }).then(r => r.data),
   })
 
   const scores: Record<string, any> = summary?.scores || {}
@@ -30,13 +39,25 @@ export default function CompliancePage() {
       <div>
         <h1 className="page-title">Compliance</h1>
         <p className="text-muted mt-1">Agent 5 checks every code change against SOC2, HIPAA, PCI-DSS 4.0, and GDPR Article 32.</p>
+        <div className="mt-3 max-w-sm">
+          <select
+            value={repositoryId}
+            onChange={(e) => setRepositoryId(e.target.value)}
+            className="input text-sm"
+            aria-label="Repository filter"
+            title="Repository filter"
+          >
+            <option value="">All repositories</option>
+            {repos.map((r: any) => <option key={r.id} value={r.id}>{r.full_name}</option>)}
+          </select>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5">
         {FRAMEWORKS.map((fw, i) => {
           const d = scores[fw.id]
           const score = d?.score ?? null
-          const color = score == null ? '#9ca3af' : score >= 80 ? '#22c55e' : score >= 60 ? '#eab308' : '#ef4444'
+          const scoreCls = score == null ? 'text-gray-400' : score >= 80 ? 'text-green-500' : score >= 60 ? 'text-yellow-500' : 'text-red-500'
           return (
             <motion.div key={fw.id} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.08 }}
               className="card p-5">
@@ -46,7 +67,7 @@ export default function CompliancePage() {
                   <div className="text-xs font-bold text-gray-500 uppercase tracking-wide">{fw.short}</div>
                   <div className="font-bold text-gray-900 text-sm mt-0.5">{fw.name}</div>
                 </div>
-                <div className="text-3xl font-black" style={{ color }}>{score != null ? `${score}%` : '—'}</div>
+                <div className={`text-3xl font-black ${scoreCls}`}>{score != null ? `${score}%` : '—'}</div>
               </div>
               <p className="text-xs text-gray-500 leading-relaxed">{fw.desc}</p>
               {d && (

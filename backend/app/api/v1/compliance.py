@@ -5,7 +5,7 @@ Per-framework scores, violation summaries, and compliance posture over time.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
+from sqlalchemy import String, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -20,6 +20,7 @@ router = APIRouter()
 
 @router.get("/compliance/summary")
 async def compliance_summary(
+    repository_id: str | None = Query(default=None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -28,9 +29,11 @@ async def compliance_summary(
         return {"scores": {}}
 
     # Get latest completed scans per repo
-    repo_ids_r = await db.execute(
-        select(Repository.id).where(Repository.organization_id == current_user.primary_org_id)
-    )
+    repo_query = select(Repository.id).where(Repository.organization_id == current_user.primary_org_id)
+    if repository_id:
+        repo_query = repo_query.where(Repository.id == repository_id)
+
+    repo_ids_r = await db.execute(repo_query)
     repo_ids = [str(r[0]) for r in repo_ids_r.fetchall()]
 
     if not repo_ids:
@@ -69,18 +72,6 @@ async def compliance_summary(
         total = data["passed"] + data["failed"]
         data["score"] = int((data["passed"] / total) * 100) if total > 0 else 100
 
-    # Count open compliance findings by framework
-    compliance_findings_r = await db.execute(
-        select(Finding.compliance_frameworks, func.count(Finding.id))
-        .join(Repository, Finding.repository_id == Repository.id)
-        .where(
-            Repository.organization_id == current_user.primary_org_id,
-            Finding.agent_type == "compliance",
-            Finding.status == "open",
-        )
-        .group_by(Finding.compliance_frameworks)
-    )
-
     return {
         "scores": aggregated,
         "frameworks_checked": list(aggregated.keys()),
@@ -90,6 +81,7 @@ async def compliance_summary(
 @router.get("/compliance/findings")
 async def compliance_findings(
     framework: str = Query(default=""),
+    repository_id: str = Query(default=""),
     limit: int = Query(default=50, le=200),
     offset: int = Query(default=0),
     current_user: User = Depends(get_current_user),
@@ -109,11 +101,14 @@ async def compliance_findings(
         )
     )
 
-    if framework:
-        # Filter by framework string in the JSON array
-        q = q.where(Finding.compliance_frameworks.contains([framework]))
+    if repository_id:
+        q = q.where(Finding.repository_id == repository_id)
 
-    total_r = await db.execute(
+    if framework:
+        # Filter JSON safely without grouping/equality on JSON type.
+        q = q.where(cast(Finding.compliance_frameworks, String).ilike(f'%"{framework}"%'))
+
+    total_query = (
         select(func.count())
         .select_from(Finding)
         .join(Repository, Finding.repository_id == Repository.id)
@@ -123,6 +118,12 @@ async def compliance_findings(
             Finding.status == "open",
         )
     )
+    if repository_id:
+        total_query = total_query.where(Finding.repository_id == repository_id)
+    if framework:
+        total_query = total_query.where(cast(Finding.compliance_frameworks, String).ilike(f'%"{framework}"%'))
+
+    total_r = await db.execute(total_query)
     total = total_r.scalar() or 0
 
     result = await db.execute(
