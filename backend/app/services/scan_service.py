@@ -155,6 +155,24 @@ async def run_scan_pipeline(scan_id: str) -> None:
             except GitHubAppError as exc:
                 log.warning("Could not fetch manifests", scan_id=scan_id, error=str(exc))
 
+            # NEW: For manual scans, also fetch common top-level code files
+            if not scan.pr_number:
+                try:
+                    log.info("Manual scan: fetching common top-level files", scan_id=scan_id)
+                    # For now, let's just fetch a few common ones to start with
+                    # A better implementation would be to list the repo tree.
+                    common_files = ["app.py", "main.py", "index.js", "src/index.js", "server.js"]
+                    for path in common_files:
+                        if path not in manifests:
+                            content = await fetch_file_content(
+                                repo.installation_id, repo.full_name, path,
+                                ref=scan.commit_sha or "HEAD",
+                            )
+                            if content:
+                                file_contents[path] = content
+                except Exception as exc:
+                    log.warning("Could not fetch common files for manual scan", scan_id=scan_id, error=str(exc))
+
     except Exception as exc:
         log.error("Fatal error fetching code from GitHub", scan_id=scan_id, error=str(exc), exc_info=True)
         async with get_db_context() as db:
