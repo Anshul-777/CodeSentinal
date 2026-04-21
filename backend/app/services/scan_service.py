@@ -180,7 +180,15 @@ async def run_scan_pipeline(scan_id: str) -> None:
             scan_row = result.scalar_one_or_none()
             if scan_row:
                 scan_row.status = "failed"
+                scan_row.completed_at = datetime.now(timezone.utc)
+                scan_row.duration_seconds = time.perf_counter() - pipeline_start
+                scan_row.risk_level = "failed"
                 scan_row.agent_errors = {"pipeline": str(exc)}
+                current_states = dict(scan_row.agent_states or {})
+                for k, v in current_states.items():
+                    if v in ("waiting", "running"):
+                        current_states[k] = "failed"
+                scan_row.agent_states = current_states
                 await db.commit()
         return
 

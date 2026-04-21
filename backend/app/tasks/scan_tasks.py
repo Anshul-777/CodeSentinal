@@ -67,7 +67,8 @@ def trigger_scan(self, scan_id: str) -> dict:
         except Exception as mark_err:
             log.error("Could not mark scan as failed", error=str(mark_err))
 
-        raise self.retry(exc=exc) from exc
+        # Do not auto-retry failed scans; keep failure terminal and visible to users.
+        raise
 
 
 def _mark_scan_failed(scan_id: str, error_msg: str):
@@ -89,6 +90,12 @@ def _mark_scan_failed(scan_id: str, error_msg: str):
             if scan and scan.status not in ("completed", "blocked"):
                 scan.status = "failed"
                 scan.agent_errors = {"pipeline": error_msg}
+                scan.risk_level = "failed"
+                current_states = dict(scan.agent_states or {})
+                for k, v in current_states.items():
+                    if v in ("waiting", "running"):
+                        current_states[k] = "failed"
+                scan.agent_states = current_states
                 scan.completed_at = datetime.now(timezone.utc)
                 await db.commit()
 

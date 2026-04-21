@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379/0"
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/1"
+    SCAN_WORKER_SLOTS: int = 1
 
     # ── JWT ────────────────────────────────────────────────────────
     JWT_SECRET_KEY: str = "fallback-insecure-jwt-key-change-me-in-production"
@@ -125,14 +126,30 @@ class Settings(BaseSettings):
     def github_app_pem(self) -> Optional[str]:
         if not self.GITHUB_APP_PRIVATE_KEY:
             return None
-        key = self.GITHUB_APP_PRIVATE_KEY.replace("\\n", "\n")
-        # If the key doesn't have PEM headers, add them
-        if "-----BEGIN" not in key:
-            # Strip any whitespace and rejoin as proper PEM
-            raw = key.replace("\n", "").replace("\r", "").replace(" ", "")
-            # Split into 64-char lines (PEM standard)
-            lines = [raw[i:i+64] for i in range(0, len(raw), 64)]
-            key = "-----BEGIN RSA PRIVATE KEY-----\n" + "\n".join(lines) + "\n-----END RSA PRIVATE KEY-----\n"
+        key = self.GITHUB_APP_PRIVATE_KEY.strip()
+
+        # Railway/Render env values are often wrapped in JSON or shell quotes.
+        if (key.startswith('"') and key.endswith('"')) or (key.startswith("'") and key.endswith("'")):
+            key = key[1:-1]
+
+        # Attempt JSON unescape first when value is provided as a JSON string.
+        if "\\n" in key:
+            try:
+                key = key.encode("utf-8").decode("unicode_escape")
+            except Exception:
+                key = key.replace("\\n", "\n")
+
+        key = key.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+        # If the key doesn't have PEM headers, add them.
+        if "-----BEGIN" not in key or "-----END" not in key:
+            raw = key.replace("\n", "").replace(" ", "")
+            lines = [raw[i:i + 64] for i in range(0, len(raw), 64)]
+            key = "-----BEGIN RSA PRIVATE KEY-----\n" + "\n".join(lines) + "\n-----END RSA PRIVATE KEY-----"
+
+        if not key.endswith("\n"):
+            key += "\n"
+
         return key
 
     @property

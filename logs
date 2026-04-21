@@ -255,3 +255,40 @@ Legend:
 Notes
 - Secrets are intentionally not printed in this file for safety.
 - Keep this file updated as each step completes to avoid repeated work/credit usage.
+
+
+=== VS Code Agent Addendum (2026-04-21) ===
+
+Purpose
+- Bottom-only appended update to align logs with latest findings and handoff.
+
+Validated Runtime Story
+- Render API can appear healthy while Railway worker fails independently.
+- Latest critical worker-side failure observed in uploaded logs: malformed GitHub App PEM/private key at JWT generation time.
+- UI inconsistency (Failed + Calculating) traced to incomplete terminal-state persistence on failure paths.
+
+Code-Side Stabilization Completed (workspace)
+- Hardened GITHUB_APP_PRIVATE_KEY normalization and PEM reconstruction handling.
+- Added clearer auth error message for malformed GitHub private key at JWT signing.
+- On fatal scan failures, now persist full terminal metadata:
+    * status=failed
+    * completed_at set
+    * duration set
+    * risk_level set to failed
+    * waiting/running agent states converted to failed
+- Disabled auto-retry requeue loop for failed scans to keep failure terminal and user-visible.
+- Queue ETA now tied to configurable worker slots instead of hardcoded constant.
+- Scan detail UI updated so terminal failed/cancelled states do not show calculating spinner/label.
+
+Operational Recommendation Before Feature Expansion
+- Redeploy worker + backend and verify one fresh scan end-to-end using same test repo flow.
+- Confirm both logs together (Render + Railway) for same scan id before closing incident.
+- Only after runtime validation, proceed with requested feature additions:
+    * delete scans button/history behavior
+    * disconnect GitHub/repo actions
+
+Cross-Agent Remarks (Antigravity + Current VS Code Agent)
+- Antigravity plan quality was strong on architecture and async loop diagnosis.
+- Improvement recommended: include mandatory "deployment reality checkpoint" before declaring stable.
+- User’s manual Railway log escalation was the decisive debugging move and should be kept as standard practice.
+

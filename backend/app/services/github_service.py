@@ -55,7 +55,13 @@ def _generate_app_jwt() -> str:
         "exp": now + (10 * 60),  # 10 minutes
         "iss": settings.GITHUB_APP_ID,
     }
-    return pyjwt.encode(payload, settings.github_app_pem, algorithm="RS256")
+    try:
+        return pyjwt.encode(payload, settings.github_app_pem, algorithm="RS256")
+    except Exception as exc:
+        raise GitHubAuthError(
+            "GitHub App private key is invalid or malformed in environment configuration. "
+            "Ensure GITHUB_APP_PRIVATE_KEY is the full PEM key with BEGIN/END lines."
+        ) from exc
 
 
 async def get_installation_access_token(installation_id: str) -> tuple[str, datetime]:

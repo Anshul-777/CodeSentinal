@@ -114,6 +114,13 @@ export default function ScanDetailPage() {
   const findings: Finding[] = findingsData?.findings || []
   const isActive = ['queued', 'running'].includes(scan.status)
   const isDone = ['completed', 'blocked', 'failed'].includes(scan.status)
+  const isRiskPending = scan.risk_score == null && ['queued', 'running'].includes(scan.status)
+  const riskLabel =
+    scan.status === 'failed'
+      ? 'Failed'
+      : scan.status === 'cancelled'
+        ? 'Cancelled'
+        : scan.risk_level || (isRiskPending ? 'Calculating…' : 'None')
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
@@ -192,14 +199,18 @@ export default function ScanDetailPage() {
         <div className="card p-6 flex items-center gap-6">
           {scan.risk_score != null ? (
             <RiskScoreRing score={scan.risk_score} />
-          ) : (
+          ) : isRiskPending ? (
             <div className="w-24 h-24 rounded-full bg-gray-100 flex items-center justify-center">
               <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
+            </div>
+          ) : (
+            <div className="w-24 h-24 rounded-full bg-gray-100 flex items-center justify-center">
+              <span className="text-xl font-black text-gray-400">-</span>
             </div>
           )}
           <div>
             <div className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-1">Risk Score</div>
-            <div className="text-2xl font-bold text-gray-900 capitalize">{scan.risk_level || 'Calculating…'}</div>
+            <div className="text-2xl font-bold text-gray-900 capitalize">{riskLabel}</div>
             <div className="text-sm text-gray-500 mt-1">
               {scan.files_scanned_count} files · {scan.ai_model || 'AI'} analysis
             </div>
@@ -279,7 +290,7 @@ export default function ScanDetailPage() {
           )}
           {isDone && (
             <div className="text-sm text-gray-500">
-              Completed in {scan.duration_seconds?.toFixed(1)}s
+              {scan.duration_seconds != null ? `Completed in ${scan.duration_seconds.toFixed(1)}s` : 'Completed'}
             </div>
           )}
         </div>

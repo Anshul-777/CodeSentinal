@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.config import settings
 from app.core.security import get_current_user
 from app.models.finding import Finding
 from app.models.repository import Repository
@@ -233,7 +234,7 @@ async def trigger_manual_scan(
         if avg_duration:
             avg_scan_seconds = max(60, int(float(avg_duration)))
 
-    worker_slots = 4
+    worker_slots = max(1, int(settings.SCAN_WORKER_SLOTS))
     available_slots = max(0, worker_slots - running_count)
     if available_slots > 0:
         estimated_wait_seconds = 5
