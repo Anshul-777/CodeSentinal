@@ -308,3 +308,31 @@ async def cancel_scan(
             pass
 
     return {"message": "Scan cancelled.", "scan_id": scan_id}
+
+
+@router.delete("/scans/{scan_id}/remove")
+async def remove_scan(
+    scan_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Hard-delete a scan and all cascade-linked findings/fixes for the org-owned repository."""
+    scan_result = await db.execute(select(Scan).where(Scan.id == scan_id))
+    scan = scan_result.scalar_one_or_none()
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found.")
+
+    repo_result = await db.execute(
+        select(Repository).where(
+            Repository.id == scan.repository_id,
+            Repository.organization_id == current_user.primary_org_id,
+        )
+    )
+    repo = repo_result.scalar_one_or_none()
+    if not repo:
+        raise HTTPException(status_code=404, detail="Scan not found.")
+
+    await db.delete(scan)
+    await db.commit()
+
+    return {"message": "Scan deleted.", "scan_id": scan_id}

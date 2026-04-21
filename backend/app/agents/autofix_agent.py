@@ -147,9 +147,21 @@ class AutoFixAgent(BaseAgent):
     async def run(self, ctx: AgentContext) -> AgentResult:
         # Collect all findings from upstream agents
         all_upstream_findings: list[dict] = []
-        for agent_name, result_data in ctx.upstream_results.items():
-            if isinstance(result_data, dict):
-                all_upstream_findings.extend(result_data.get("findings", []))
+
+        # Preferred payload from orchestrator: actual finding dicts
+        if isinstance(ctx.upstream_results.get("_all_findings"), list):
+            all_upstream_findings = [
+                f for f in ctx.upstream_results.get("_all_findings", [])
+                if isinstance(f, dict)
+            ]
+        else:
+            # Backward-compatible fallback when each agent embeds findings directly.
+            for _agent_name, result_data in ctx.upstream_results.items():
+                if not isinstance(result_data, dict):
+                    continue
+                findings_value = result_data.get("findings", [])
+                if isinstance(findings_value, list):
+                    all_upstream_findings.extend([f for f in findings_value if isinstance(f, dict)])
 
         # Filter to fixable findings
         fixable = [

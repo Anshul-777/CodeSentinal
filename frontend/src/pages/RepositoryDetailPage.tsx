@@ -1,7 +1,7 @@
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { ArrowLeft, GitBranch, Settings, Play, Loader2, CheckCircle, AlertTriangle, Activity } from 'lucide-react'
+import { ArrowLeft, Settings, Play, Loader2, Unplug } from 'lucide-react'
 import apiClient from '@/api/client'
 import type { Repository, Scan } from '@/types'
 import { format, parseISO } from 'date-fns'
@@ -27,6 +27,18 @@ export default function RepositoryDetailPage() {
   const configMutation = useMutation({
     mutationFn: (update: Partial<Repository>) => apiClient.patch(`/repos/${repoId}`, update),
     onSuccess: () => { toast.success('Repository settings saved'); qc.invalidateQueries({ queryKey: ['repo', repoId] }) },
+  })
+
+  const disconnectMutation = useMutation({
+    mutationFn: () => apiClient.delete(`/repos/${repoId}`),
+    onSuccess: () => {
+      toast.success('Repository disconnected')
+      qc.invalidateQueries({ queryKey: ['repos'] })
+      window.location.href = '/app/repositories'
+    },
+    onError: (e: any) => {
+      toast.error(e?.response?.data?.detail || 'Failed to disconnect repository')
+    },
   })
 
   const triggerScan = async () => {
@@ -65,6 +77,17 @@ export default function RepositoryDetailPage() {
         <button onClick={triggerScan} disabled={triggerLoading} className="btn-primary text-sm">
           {triggerLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
           Trigger Scan
+        </button>
+        <button
+          type="button"
+          className="btn-secondary text-sm"
+          onClick={() => {
+            if (!window.confirm(`Disconnect ${repo.full_name}?`)) return
+            disconnectMutation.mutate()
+          }}
+        >
+          <Unplug className="w-4 h-4" />
+          Disconnect
         </button>
       </div>
 

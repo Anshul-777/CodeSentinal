@@ -96,6 +96,7 @@ async def run_scan_pipeline(scan_id: str) -> None:
     file_contents: dict[str, str] = {}
     manifests: dict[str, str] = {}
     check_run_id: Optional[str] = None
+    github_fetch_errors: list[str] = []
 
     try:
         if repo.installation_id:
@@ -123,6 +124,7 @@ async def run_scan_pipeline(scan_id: str) -> None:
                             await db.commit()
                 except GitHubAppError as exc:
                     log.warning("Could not create check run", scan_id=scan_id, error=str(exc))
+                    github_fetch_errors.append(str(exc))
 
             # Fetch diff for PR scans
             if scan.pr_number:
@@ -145,6 +147,7 @@ async def run_scan_pipeline(scan_id: str) -> None:
                                 file_contents[path] = content
                 except GitHubAppError as exc:
                     log.warning("Could not fetch PR diff", scan_id=scan_id, error=str(exc))
+                    github_fetch_errors.append(str(exc))
 
             # Fetch manifests
             try:
@@ -154,6 +157,7 @@ async def run_scan_pipeline(scan_id: str) -> None:
                 )
             except GitHubAppError as exc:
                 log.warning("Could not fetch manifests", scan_id=scan_id, error=str(exc))
+                github_fetch_errors.append(str(exc))
 
             # NEW: For manual scans, also fetch common top-level code files
             if not scan.pr_number:
@@ -172,6 +176,7 @@ async def run_scan_pipeline(scan_id: str) -> None:
                                 file_contents[path] = content
                 except Exception as exc:
                     log.warning("Could not fetch common files for manual scan", scan_id=scan_id, error=str(exc))
+                    github_fetch_errors.append(str(exc))
 
     except Exception as exc:
         log.error("Fatal error fetching code from GitHub", scan_id=scan_id, error=str(exc), exc_info=True)
@@ -189,6 +194,37 @@ async def run_scan_pipeline(scan_id: str) -> None:
                     if v in ("waiting", "running"):
                         current_states[k] = "failed"
                 scan_row.agent_states = current_states
+                await db.commit()
+        return
+
+    # If GitHub was required but no code could be fetched, fail fast instead of
+    # reporting a misleading successful zero-file scan.
+    if repo.installation_id and not diff_content and not file_contents and github_fetch_errors:
+        reason = github_fetch_errors[-1]
+        log.error(
+            "Scan aborted due to missing repository content",
+            scan_id=scan_id,
+            repo=repo.full_name,
+            reason=reason,
+        )
+        async with get_db_context() as db:
+            result = await db.execute(select(Scan).where(Scan.id == scan_id))
+            scan_row = result.scalar_one_or_none()
+            if scan_row:
+                scan_row.status = "failed"
+                scan_row.completed_at = datetime.now(timezone.utc)
+                scan_row.duration_seconds = time.perf_counter() - pipeline_start
+                scan_row.risk_level = "failed"
+                scan_row.agent_errors = {
+                    "pipeline": "Repository content fetch failed. " + reason,
+                }
+                scan_row.agent_states = {
+                    "static": "failed",
+                    "dependency": "failed",
+                    "business_logic": "failed",
+                    "autofix": "failed",
+                    "compliance": "failed",
+                }
                 await db.commit()
         return
 
@@ -225,6 +261,14 @@ async def run_scan_pipeline(scan_id: str) -> None:
     )
 
     r1, r2, r3, r5 = results
+
+    final_agent_states = {
+        "static": "failed" if isinstance(r1, Exception) else ("completed" if r1.success else "failed"),
+        "dependency": "failed" if isinstance(r2, Exception) else ("completed" if r2.success else "failed"),
+        "business_logic": "failed" if isinstance(r3, Exception) else ("completed" if r3.success else "failed"),
+        "compliance": "failed" if isinstance(r5, Exception) else ("completed" if r5.success else "failed"),
+        "autofix": "waiting",
+    }
 
     # Collect all findings from completed agents
     all_findings: list[dict] = []
@@ -264,6 +308,7 @@ async def run_scan_pipeline(scan_id: str) -> None:
     fix_result = await agent4.execute(ctx)
     agent_durations["autofix"] = round(fix_result.duration_seconds, 2)
     fix_data = fix_result.extra if fix_result.success else {}
+    final_agent_states["autofix"] = "completed" if fix_result.success else "failed"
 
     # ── Persist all findings to database ──────────────────────────
     async with get_db_context() as db:
@@ -390,6 +435,7 @@ async def run_scan_pipeline(scan_id: str) -> None:
             scan_row.fixes_available = len([f for f in fix_records if f.get("status") == "verified"])
             scan_row.agent_results = agent_results_summary
             scan_row.agent_durations = agent_durations
+            scan_row.agent_states = final_agent_states
             scan_row.compliance_results = compliance_results
             scan_row.merge_blocked = merge_blocked
             scan_row.merge_block_reason = block_reason

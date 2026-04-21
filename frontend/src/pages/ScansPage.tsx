@@ -1,17 +1,31 @@
 import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { useState } from 'react'
-import { Activity, ArrowRight, CheckCircle, XCircle, Loader2, Clock, Lock, Play } from 'lucide-react'
+import { Activity, ArrowRight, Loader2, Lock, Trash2 } from 'lucide-react'
 import apiClient from '@/api/client'
 import type { Scan } from '@/types'
 import { format, parseISO } from 'date-fns'
 import clsx from 'clsx'
+import toast from 'react-hot-toast'
 
 export default function ScansPage() {
+  const qc = useQueryClient()
   const [status, setStatus] = useState('')
   const [repositoryId, setRepositoryId] = useState('')
   const [offset, setOffset] = useState(0)
   const limit = 25
+
+  const removeScanMutation = useMutation({
+    mutationFn: (scanId: string) => apiClient.delete(`/scans/${scanId}/remove`),
+    onSuccess: () => {
+      toast.success('Scan deleted')
+      qc.invalidateQueries({ queryKey: ['scans'] })
+    },
+    onError: (e: any) => {
+      toast.error(e?.response?.data?.detail || 'Failed to delete scan')
+    },
+  })
 
   const { data: reposData } = useQuery({
     queryKey: ['repos'],
@@ -54,7 +68,7 @@ export default function ScansPage() {
         scans.length === 0 ? <div className="p-16 text-center"><Activity className="w-12 h-12 mx-auto mb-3 text-gray-200"/><p className="text-gray-500">No scans found</p></div> : (
           <table className="w-full text-sm">
             <thead><tr className="border-b border-gray-100 bg-gray-50 text-left">
-              {['Status','Trigger','Branch / PR','Risk','Findings','Duration','Date',''].map(h => <th key={h} className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>)}
+              {['Status','Trigger','Branch / PR','Risk','Findings','Duration','Date','',''].map((h, idx) => <th key={`${h}-${idx}`} className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>)}
             </tr></thead>
             <tbody className="divide-y divide-gray-50">
               {scans.map(scan => (
@@ -84,6 +98,22 @@ export default function ScansPage() {
                   <td className="px-4 py-3.5 text-xs text-gray-500">{scan.duration_seconds ? `${scan.duration_seconds.toFixed(1)}s` : '—'}</td>
                   <td className="px-4 py-3.5 text-xs text-gray-500">{format(parseISO(scan.created_at), 'MMM d, h:mm a')}</td>
                   <td className="px-4 py-3.5"><Link to={`/app/scans/${scan.id}`} className="opacity-0 group-hover:opacity-100 transition-opacity"><ArrowRight className="w-4 h-4 text-gray-400"/></Link></td>
+                  <td className="px-2 py-3.5">
+                    <button
+                      type="button"
+                      title="Delete scan"
+                      aria-label="Delete scan"
+                      className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded hover:bg-red-50"
+                      onClick={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        if (!window.confirm('Delete this scan and its related findings/fixes?')) return
+                        removeScanMutation.mutate(scan.id)
+                      }}
+                    >
+                      <Trash2 className="w-4 h-4 text-red-500" />
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>

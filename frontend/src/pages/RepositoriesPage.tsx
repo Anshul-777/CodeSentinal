@@ -90,6 +90,17 @@ export default function RepositoriesPage() {
     },
   })
 
+  const disconnectMutation = useMutation({
+    mutationFn: (repoId: string) => apiClient.delete(`/repos/${repoId}`),
+    onSuccess: () => {
+      toast.success('Repository disconnected')
+      qc.invalidateQueries({ queryKey: ['repos'] })
+    },
+    onError: (e: any) => {
+      toast.error(e?.response?.data?.detail || 'Failed to disconnect repository')
+    },
+  })
+
   useEffect(() => {
     const installationId = searchParams.get('installation_id')
     if (!installationId) return
@@ -320,6 +331,20 @@ export default function RepositoriesPage() {
                     )}
                   </div>
                   <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      title="Disconnect repository"
+                      aria-label="Disconnect repository"
+                      className="p-1.5 rounded hover:bg-red-50"
+                      onClick={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        if (!window.confirm(`Disconnect ${repo.full_name}?`)) return
+                        disconnectMutation.mutate(repo.id)
+                      }}
+                    >
+                      <Unplug className="w-4 h-4 text-red-500" />
+                    </button>
                     <RiskPill score={repo.last_scan_risk_score ?? undefined} />
                     <ArrowRight className="w-4 h-4 text-gray-300" />
                   </div>

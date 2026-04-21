@@ -389,6 +389,13 @@ export default function ScanDetailPage() {
                   const colors = COLOR_MAP[agent.color]
                   const Icon = agent.icon
                   const agentFindings = findings.filter((f) => f.agent_type === expandedAgent)
+                  const summaryEntries = Object.entries(result || {}).filter(([k, v]) => {
+                    if (k === 'findings' || k === 'success') return false
+                    if (v == null) return false
+                    if (Array.isArray(v) && v.length === 0) return false
+                    if (typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0) return false
+                    return true
+                  })
 
                   return (
                     <div className={clsx('rounded-xl border p-5', colors.border, colors.bg)}>
@@ -458,10 +465,27 @@ export default function ScanDetailPage() {
                           )}
                         </div>
                       ) : (
-                        <div className="text-center py-4 text-sm text-gray-500">
-                          {scan.agent_states?.[expandedAgent as keyof typeof scan.agent_states] === 'completed'
-                            ? '✓ No findings — this agent found nothing to report'
-                            : 'Findings will appear here once the agent completes'}
+                        <div className="space-y-3">
+                          <div className="text-center py-2 text-sm text-gray-500">
+                            {scan.agent_states?.[expandedAgent as keyof typeof scan.agent_states] === 'completed'
+                              ? '✓ No findings — this agent found nothing to report'
+                              : 'Findings will appear here once the agent completes'}
+                          </div>
+                          {summaryEntries.length > 0 && (
+                            <div className="bg-white rounded-xl border border-gray-200 p-3">
+                              <div className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-2">Agent Summary</div>
+                              <div className="space-y-1">
+                                {summaryEntries.map(([k, v]) => (
+                                  <div key={k} className="flex items-start justify-between gap-2 text-xs">
+                                    <span className="text-gray-500 capitalize">{k.replace(/_/g, ' ')}</span>
+                                    <span className="text-gray-800 text-right break-all">
+                                      {typeof v === 'object' ? JSON.stringify(v) : String(v)}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
