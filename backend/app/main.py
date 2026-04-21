@@ -195,12 +195,15 @@ app.include_router(webhooks.router, prefix="/webhooks", tags=["Webhooks"])
 # ── System Endpoints ───────────────────────────────────────────────
 @app.get("/health", include_in_schema=False)
 async def health():
+    from app.core.database import check_db_connection, check_redis_connection
     db_ok = await check_db_connection()
+    redis_ok = await check_redis_connection()
     return {
-        "status": "healthy" if db_ok else "degraded",
+        "status": "healthy" if db_ok and redis_ok else "degraded",
         "version": settings.APP_VERSION,
         "environment": settings.APP_ENV,
         "database": "connected" if db_ok else "disconnected",
+        "redis": "connected" if redis_ok else "disconnected",
         "github_app": settings.github_configured,
     }
 

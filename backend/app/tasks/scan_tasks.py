@@ -17,6 +17,7 @@ log = structlog.get_logger("tasks.scan")
     bind=True,
     max_retries=3,
     default_retry_delay=30,
+    queue="scans",
 )
 def trigger_scan(self, scan_id: str) -> dict:
     """

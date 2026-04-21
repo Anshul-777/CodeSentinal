@@ -154,6 +154,104 @@ Legend:
                     Only GitHub App settings in Developer Console need updating.
     Status: Awaiting user approval before updating.
 
+=== Post-Callback Production Debugging (2026-04-20) ===
+
+[*] Issue 2: Database Auto-Seed Safety Net ✅ FIXED
+    - Implemented startup schema sync fallback (auto-create missing ORM tables)
+    - Added ensure_schema() in backend startup lifecycle
+    - Commit: bd1e692 pushed to main
+    - Result: platform no longer depends on paid Render shell to initialize missing tables
+
+[*] Issue 5: Opaque "failed/CORS" Masking Real Backend Error ✅ FIXED
+    - Added structured 500 responses with `detail`, `error`, and `request_id`
+    - Added `X-Request-ID` on failure path and preserved CORS headers for allowed origins
+    - Frontend now displays backend error text + request id in toast
+    - Commit: 8475704 pushed to main
+    - Result: precise root cause surfaced to user instead of generic failure message
+
+[*] Issue 6: Platform-Wide SQL Type Mismatch (`varchar = uuid`) ✅ FIXED
+    - Root cause: several ORM models used PostgreSQL UUID bind types while live DB columns are varchar(36)
+    - Error seen across dashboards/repos/connect queries: `operator does not exist: character varying = uuid`
+    - Fix: aligned model ID/FK columns to String(36) in:
+      * backend/app/models/repository.py
+      * backend/app/models/scan.py
+      * backend/app/models/finding.py
+      * backend/app/models/fix.py
+      * backend/app/models/audit.py
+    - Commit: 3517673 pushed to main
+    - Result: query filters now bind as varchar and match existing schema
+
+[*] Issue 7: Repeated Error Toast Flood Across Pages ✅ FIXED
+    - Added error-toast deduplication window in API client
+    - Removed duplicate page-level toasts when interceptor already handles API errors
+    - Commit: 3517673 (same deployment as Issue 6)
+    - Result: one meaningful error shown instead of repeated spam on every query
+
+[*] Current Deployment State
+    - Backend fixes deployed via Render auto-deploy from main branch
+    - Frontend fixes deployed via Vercel auto-deploy from main branch
+    - No Render/Railway credential resets required for these fixes
+
+=== Production Stabilization and UX Improvements (2026-04-21) ===
+
+[*] Celery Redis TLS Scan Trigger Failure ✅ FIXED
+        - Symptom: scan trigger failed while creating Celery backend over rediss URL
+        - Fix: normalized rediss query handling and enforced TLS cert requirements in Celery config
+        - File: backend/app/core/celery_app.py
+        - Result: scans now queue successfully from production UI
+
+[*] GitHub Webhook Logging Crash ✅ FIXED
+        - Symptom: `BoundLogger.info() got multiple values for argument 'event'`
+        - Fix: renamed structlog context field from `event` to `github_event`
+        - File: backend/app/api/v1/webhooks.py
+        - Result: webhook endpoint no longer throws logging signature errors
+
+[*] AI Provider Runtime Key Refresh + Fallback UX ✅ FIXED
+        - Symptom: model test/config still showed unavailable after setting key
+        - Root cause: provider adapters cached API key values at import time
+        - Fix: dynamic key resolution at request time + source/category metadata for UI
+        - Fallback order now: Gemini -> OpenRouter -> Groq -> Ollama (then paid providers)
+        - Files:
+            * backend/app/ai/model_router.py
+            * backend/app/api/v1/models_config.py
+            * frontend/src/pages/ModelsPage.tsx
+            * frontend/src/types/index.ts
+
+[*] GitHub Push Protection Secret Block ✅ RESOLVED
+        - Initial push rejected due to secret scanning on hardcoded key values in config
+        - Fix: removed hardcoded platform keys from source; retained env-based key support
+        - Commit amended and pushed successfully
+        - Commit: c0bbd33
+
+[*] Repository Filtering, Compliance API Error, Settings UX Batch ✅ FIXED
+        - Repo filtering:
+            * Added repository filter support so "All repositories" no longer sticks to one repo
+            * Updated scans/findings/compliance pages
+        - Compliance error:
+            * Fixed PostgreSQL JSON grouping/equality failure on compliance page queries
+            * Corrected totals for filtered compliance findings
+        - Scan ETA:
+            * Added queue position + estimated wait/total scan seconds in manual scan response
+            * Added frontend toast showing estimate on trigger
+        - Repository connect state:
+            * Connect button now reflects connected state after GitHub integration
+        - Settings redesign:
+            * Full-width settings layout with richer profile details, avatar gallery, and GitHub data panel
+            * Added permanent account deletion flow with confirmation in danger zone
+        - Files:
+            * backend/app/api/v1/auth.py
+            * backend/app/api/v1/compliance.py
+            * backend/app/api/v1/scans.py
+            * frontend/src/pages/CompliancePage.tsx
+            * frontend/src/pages/FindingsPage.tsx
+            * frontend/src/pages/RepositoriesPage.tsx
+            * frontend/src/pages/RepositoryDetailPage.tsx
+            * frontend/src/pages/ScansPage.tsx
+            * frontend/src/pages/SettingsPage.tsx
+            * frontend/src/types/index.ts
+        - Commit: b87b9df
+        - Deploy status: pushed to main, production auto-deploy triggered
+
 Notes
 - Secrets are intentionally not printed in this file for safety.
 - Keep this file updated as each step completes to avoid repeated work/credit usage.

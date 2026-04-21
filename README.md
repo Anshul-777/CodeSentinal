@@ -25,19 +25,21 @@ FastAPI Backend (Python)
 
 ## Tech Stack
 
-| Layer | Technology |
-|-------|-----------|
-| Backend API | FastAPI 0.111, Python 3.12 |
-| Database | PostgreSQL 15 + SQLAlchemy 2.0 async |
-| Task Queue | Celery 5.4 + Redis |
-| AI — Local | Ollama + CodeLlama 13B |
-| AI — Cloud Free | Groq (Llama 3.1 70B) |
-| AI — Optional | OpenAI, Anthropic, Gemini |
-| Static Analysis | Bandit, custom AST scanner |
-| CVE Database | OSV.dev API (free, no key needed) |
-| Frontend | React 18 + TypeScript + Vite + Tailwind |
-| Auth | JWT (RS256) + bcrypt |
-| GitHub Integration | GitHub App (webhooks, check runs, PR reviews) |
+|----------------------|------------------------------------------------|
+|        Layer         |                   Technology                   |
+|----------------------|------------------------------------------------|
+| Backend API          | FastAPI 0.111, Python 3.12                     |
+| Database             | PostgreSQL 15 + SQLAlchemy 2.0 async           |
+| Task Queue           | Celery 5.4 + Redis                             |
+| AI — Local           | Ollama + CodeLlama 13B                         |
+| AI — Cloud Free      | Groq (Llama 3.1 70B)                           |
+| AI — Optional        | OpenAI, Anthropic, Gemini                      |
+| Static Analysis      | Bandit, custom AST scanner                     |
+| CVE Database         | OSV.dev API (free, no key needed)              |
+| Frontend             | React 18 + TypeScript + Vite + Tailwind        |
+| Auth                 | JWT (RS256) + bcrypt                           |
+| GitHub Integration   | GitHub App (webhooks, check runs, PR reviews)  |
+|----------------------|------------------------------------------------|
 
 ## Quick Start
 

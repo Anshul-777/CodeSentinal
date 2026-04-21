@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     APP_VERSION: str = "1.0.0"
     APP_ENV: str = "development"
     DEBUG: bool = False
-    SECRET_KEY: str = secrets.token_urlsafe(64)
+    SECRET_KEY: str = "fallback-insecure-secret-key-change-me-in-production"
     FRONTEND_URL: str = "http://localhost:5173"
     ALLOWED_ORIGINS: List[str] = ["http://localhost:5173", "http://localhost:3000"]
     CORS_ALLOW_ORIGIN_REGEX: Optional[str] = r"^https://[a-z0-9-]+\.vercel\.app$"
@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/1"
 
     # ── JWT ────────────────────────────────────────────────────────
-    JWT_SECRET_KEY: str = secrets.token_urlsafe(64)
+    JWT_SECRET_KEY: str = "fallback-insecure-jwt-key-change-me-in-production"
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7

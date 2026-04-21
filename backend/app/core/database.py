@@ -82,6 +82,16 @@ async def check_db_connection() -> bool:
         return False
 
 
+async def check_redis_connection() -> bool:
+    try:
+        import redis.asyncio as redis
+        from app.core.config import settings
+        r = redis.from_url(settings.REDIS_URL, socket_connect_timeout=2)
+        return await r.ping()
+    except Exception:
+        return False
+
+
 async def ensure_schema() -> None:
     """Create any missing tables from ORM metadata.
 
