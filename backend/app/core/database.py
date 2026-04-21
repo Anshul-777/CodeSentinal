@@ -1,6 +1,10 @@
 """
 CodeSentinel — Async Database Engine
 SQLAlchemy 2.0 async with session factory and health check.
+
+IMPORTANT for Celery workers:
+  - Uses NullPool to prevent connection caching across asyncio.run() calls.
+  - Provides dispose_engine() to clear stale connections when event loops change.
 """
 from __future__ import annotations
 
@@ -44,17 +48,22 @@ def _normalize_db_url(url: str) -> str:
 
 
 def _create_engine() -> AsyncEngine:
+    """Create an async engine.
+
+    Uses NullPool so that connections are never cached between different
+    asyncio event loops (critical for Celery workers that call asyncio.run()
+    which creates/destroys event loops per task).
+    """
     db_url = _normalize_db_url(settings.DATABASE_URL)
-    kwargs: dict = {"echo": settings.DATABASE_ECHO, "pool_pre_ping": True}
-    if settings.APP_ENV == "testing":
-        kwargs["poolclass"] = NullPool
-    else:
-        kwargs["pool_size"] = settings.DATABASE_POOL_SIZE
-        kwargs["max_overflow"] = settings.DATABASE_MAX_OVERFLOW
-        kwargs["pool_timeout"] = settings.DATABASE_POOL_TIMEOUT
+    kwargs: dict = {
+        "echo": settings.DATABASE_ECHO,
+        "pool_pre_ping": True,
+        "poolclass": NullPool,  # CRITICAL: prevents "attached to different loop"
+    }
     return create_async_engine(db_url, **kwargs)
 
 
+# Module-level engine — NullPool means no persistent connections to go stale
 engine: AsyncEngine = _create_engine()
 
 AsyncSessionLocal = async_sessionmaker(
@@ -64,6 +73,30 @@ AsyncSessionLocal = async_sessionmaker(
     autocommit=False,
     autoflush=False,
 )
+
+
+def dispose_engine():
+    """Dispose the engine, clearing all connections.
+
+    Call this before creating a new asyncio event loop (e.g. after a
+    failed asyncio.run() in a Celery task) to prevent
+    'got Future attached to a different loop' errors.
+    """
+    global engine, AsyncSessionLocal
+    try:
+        # Can't await in sync context, but dispose() works synchronously
+        engine.sync_engine.dispose()
+    except Exception:
+        pass
+    # Rebuild with a fresh engine
+    engine = _create_engine()
+    AsyncSessionLocal = async_sessionmaker(
+        engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+        autocommit=False,
+        autoflush=False,
+    )
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

@@ -13,4 +13,4 @@ RUN grep -Ev "^(qdrant-client|sentence-transformers)==" requirements.txt > requi
 
 COPY . .
 
-CMD ["celery", "-A", "app.core.celery_app", "worker", "--loglevel=info", "-Q", "default,scans,agents"]
+CMD ["celery", "-A", "app.core.celery_app", "worker", "--loglevel=info", "--pool=solo", "--concurrency=1", "-Q", "default,scans,agents"]

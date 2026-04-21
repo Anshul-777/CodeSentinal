@@ -63,7 +63,7 @@ celery_app.conf.update(
     task_default_retry_delay=60,
     task_soft_time_limit=600,
     task_time_limit=900,
-    worker_concurrency=4,
+    worker_concurrency=1,
     broker_use_ssl={"ssl_cert_reqs": CERT_REQUIRED} if broker_url.startswith("rediss") else None,
     redis_backend_use_ssl={"ssl_cert_reqs": CERT_REQUIRED} if result_backend_url.startswith("rediss") else None,
     beat_schedule={

@@ -13,7 +13,7 @@ echo "Migrations complete."
 # This allows the app to work on single-service hosting plans like Render Free Tier
 if [ "$SKIP_WORKER" != "true" ]; then
     echo "Starting Celery worker in background..."
-    celery -A app.core.celery_app worker --loglevel=info -Q default,scans,agents --concurrency=2 &
+    celery -A app.core.celery_app worker --loglevel=info --pool=solo --concurrency=1 -Q default,scans,agents &
 fi
 
 # Start the uvicorn server

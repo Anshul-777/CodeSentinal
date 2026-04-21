@@ -1,6 +1,10 @@
 """
 CodeSentinel — Celery Scan Tasks
 Async task workers that execute the scan pipeline in background.
+
+IMPORTANT: All async work MUST happen inside a SINGLE asyncio.run() call.
+Multiple asyncio.run() calls create/destroy event loops, breaking the
+SQLAlchemy async engine's connection pool (connections get bound to a dead loop).
 """
 from __future__ import annotations
 
@@ -22,56 +26,73 @@ log = structlog.get_logger("tasks.scan")
 def trigger_scan(self, scan_id: str) -> dict:
     """
     Celery task: run the full 5-agent scan pipeline for a scan ID.
-    Uses asyncio.run to bridge sync Celery with async pipeline.
+    Uses a SINGLE asyncio.run() to bridge sync Celery with async pipeline.
     """
     log.info("Scan task started", scan_id=scan_id, task_id=self.request.id)
 
-    try:
-        # Update the scan record with the Celery task ID
+    async def _run_full_pipeline():
+        """All async DB + pipeline work in ONE coroutine, ONE event loop."""
         from app.core.database import get_db_context
         from app.models.scan import Scan
         from sqlalchemy import select
 
-        async def _update_task_id():
+        # Step 1: Update the scan record with the Celery task ID
+        try:
             async with get_db_context() as db:
                 result = await db.execute(select(Scan).where(Scan.id == scan_id))
                 scan = result.scalar_one_or_none()
                 if scan:
                     scan.celery_task_id = self.request.id
                     await db.commit()
+        except Exception as e:
+            log.warning("Could not update task ID", error=str(e))
 
-        asyncio.run(_update_task_id())
-
-        # Run the pipeline
+        # Step 2: Run the scan pipeline (same event loop!)
         from app.services.scan_service import run_scan_pipeline
-        asyncio.run(run_scan_pipeline(scan_id))
+        await run_scan_pipeline(scan_id)
 
+    try:
+        asyncio.run(_run_full_pipeline())
         log.info("Scan task completed", scan_id=scan_id)
         return {"scan_id": scan_id, "status": "completed"}
 
     except Exception as exc:
         log.error("Scan task failed", scan_id=scan_id, error=str(exc), exc_info=True)
 
-        # Update scan status to failed
-        async def _mark_failed():
-            from app.core.database import get_db_context
-            from app.models.scan import Scan
-            from sqlalchemy import select
-            from datetime import datetime, timezone
-
-            async with get_db_context() as db:
-                result = await db.execute(select(Scan).where(Scan.id == scan_id))
-                scan = result.scalar_one_or_none()
-                if scan and scan.status not in ("completed", "blocked"):
-                    scan.status = "failed"
-                    scan.agent_errors = {"pipeline": str(exc)}
-                    from datetime import datetime, timezone
-                    scan.completed_at = datetime.now(timezone.utc)
-                    await db.commit()
-
-        asyncio.run(_mark_failed())
+        # Mark scan as failed — in a SEPARATE asyncio.run because the
+        # previous one crashed. We must dispose the engine first to clear
+        # any connections bound to the now-dead event loop.
+        try:
+            _mark_scan_failed(scan_id, str(exc))
+        except Exception as mark_err:
+            log.error("Could not mark scan as failed", error=str(mark_err))
 
         raise self.retry(exc=exc) from exc
+
+
+def _mark_scan_failed(scan_id: str, error_msg: str):
+    """Mark a scan as failed using a fresh event loop and fresh DB connections."""
+    from app.core.database import dispose_engine
+
+    # Dispose the engine to clear stale connections from the crashed loop
+    dispose_engine()
+
+    async def _do_mark():
+        from app.core.database import get_db_context
+        from app.models.scan import Scan
+        from sqlalchemy import select
+        from datetime import datetime, timezone
+
+        async with get_db_context() as db:
+            result = await db.execute(select(Scan).where(Scan.id == scan_id))
+            scan = result.scalar_one_or_none()
+            if scan and scan.status not in ("completed", "blocked"):
+                scan.status = "failed"
+                scan.agent_errors = {"pipeline": error_msg}
+                scan.completed_at = datetime.now(timezone.utc)
+                await db.commit()
+
+    asyncio.run(_do_mark())
 
 
 @celery_app.task(name="app.tasks.scan_tasks.cleanup_old_jobs")
