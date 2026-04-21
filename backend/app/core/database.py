@@ -23,7 +23,28 @@ class Base(DeclarativeBase):
     pass
 
 
+def _normalize_db_url(url: str) -> str:
+    """Ensure the DATABASE_URL uses the asyncpg driver for async SQLAlchemy.
+
+    Render/Railway provide URLs like ``postgresql://...`` which default to
+    the synchronous psycopg2 driver.  ``create_async_engine`` requires
+    ``postgresql+asyncpg://...``.  This helper transparently rewrites the
+    scheme so the worker never crashes with:
+        'The asyncio extension requires an async driver to be used.'
+    """
+    if url.startswith("postgresql+asyncpg://"):
+        return url                                        # already correct
+    if url.startswith("postgresql+psycopg2://"):
+        return url.replace("postgresql+psycopg2://", "postgresql+asyncpg://", 1)
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    if url.startswith("postgres://"):                     # legacy Heroku-style
+        return url.replace("postgres://", "postgresql+asyncpg://", 1)
+    return url
+
+
 def _create_engine() -> AsyncEngine:
+    db_url = _normalize_db_url(settings.DATABASE_URL)
     kwargs: dict = {"echo": settings.DATABASE_ECHO, "pool_pre_ping": True}
     if settings.APP_ENV == "testing":
         kwargs["poolclass"] = NullPool
@@ -31,7 +52,7 @@ def _create_engine() -> AsyncEngine:
         kwargs["pool_size"] = settings.DATABASE_POOL_SIZE
         kwargs["max_overflow"] = settings.DATABASE_MAX_OVERFLOW
         kwargs["pool_timeout"] = settings.DATABASE_POOL_TIMEOUT
-    return create_async_engine(settings.DATABASE_URL, **kwargs)
+    return create_async_engine(db_url, **kwargs)
 
 
 engine: AsyncEngine = _create_engine()
