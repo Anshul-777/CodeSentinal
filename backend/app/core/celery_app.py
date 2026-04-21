@@ -64,8 +64,8 @@ celery_app.conf.update(
     task_soft_time_limit=600,
     task_time_limit=900,
     worker_concurrency=4,
-    broker_use_ssl={"ssl_cert_reqs": CERT_REQUIRED},
-    redis_backend_use_ssl={"ssl_cert_reqs": CERT_REQUIRED},
+    broker_use_ssl={"ssl_cert_reqs": CERT_REQUIRED} if broker_url.startswith("rediss") else None,
+    redis_backend_use_ssl={"ssl_cert_reqs": CERT_REQUIRED} if result_backend_url.startswith("rediss") else None,
     beat_schedule={
         "cleanup-old-scan-jobs": {
             "task": "app.tasks.scan_tasks.cleanup_old_jobs",
