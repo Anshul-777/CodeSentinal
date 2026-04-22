@@ -680,6 +680,11 @@ async def complete_json(
         lines = [l for l in lines if not l.strip().startswith("```")]
         text = "\n".join(lines)
     try:
-        return json.loads(text)
+        payload = json.loads(text)
+        if isinstance(payload, dict):
+            payload.setdefault("_provider", response.provider)
+            payload.setdefault("_model", response.model)
+            payload.setdefault("_tokens", response.total_tokens)
+        return payload
     except json.JSONDecodeError as exc:
         raise ValueError(f"AI response was not valid JSON: {exc}\nRaw content: {text[:500]}")

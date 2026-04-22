@@ -32,8 +32,9 @@ SECRET_PATTERNS: list[tuple[str, str, str]] = [
     (r'(?i)(aws_access_key_id|aws_secret_access_key)\s*[=:]\s*["\']?([A-Z0-9/+]{20,40})', "aws_credential", "AWS credential"),
     (r'(?i)(api[_-]?key|apikey)\s*[=:]\s*["\']([a-zA-Z0-9_\-]{20,80})["\']', "api_key", "Generic API key"),
     (r'(?i)(password|passwd|pwd)\s*[=:]\s*["\']([^"\']{8,})["\']', "hardcoded_password", "Hardcoded password"),
-    (r'ghp_[a-zA-Z0-9]{36}', "github_pat", "GitHub personal access token"),
-    (r'ghs_[a-zA-Z0-9]{36}', "github_actions_token", "GitHub Actions token"),
+    (r'ghp_[a-zA-Z0-9]{16,}', "github_pat", "GitHub personal access token"),
+    (r'ghs_[a-zA-Z0-9]{16,}', "github_actions_token", "GitHub Actions token"),
+    (r'(?i)\b(token|access[_-]?token|auth[_-]?token)\b\s*[=:]\s*["\']([a-zA-Z0-9_\-]{12,})["\']', "generic_token", "Generic access token"),
     (r'sk-[a-zA-Z0-9]{48}', "openai_key", "OpenAI API key"),
     (r'sk_live_[a-zA-Z0-9]{24,}', "stripe_live_key", "Stripe live secret key"),
     (r'(?i)(jwt[_-]?secret|jwt[_-]?key)\s*[=:]\s*["\']([^"\']{10,})["\']', "jwt_secret", "JWT secret"),
@@ -58,13 +59,30 @@ DANGEROUS_PATTERNS: list[tuple[str, str, str, str, float]] = [
     (r'yaml\.load\s*\([^,)]+\)', "STATIC-DESER-002", "yaml.load() without Loader — arbitrary code execution", "deserialization", 8.8),
     (r'hashlib\.(md5|sha1)\s*\(', "STATIC-CRYPTO-001", "Use of weak hash algorithm (MD5/SHA1)", "crypto", 5.3),
     (r'random\.(random|randint|choice)\s*\(', "STATIC-CRYPTO-002", "Use of non-cryptographic random for security context", "crypto", 6.5),
+    (r'\b(?:cursor\.)?execute\s*\(\s*f["\']', "STATIC-SQLI-001", "SQL query built with f-string", "injection", 9.1),
+    (r'\b(?:cursor\.)?execute\s*\(\s*["\'][^"\']*(SELECT|INSERT|UPDATE|DELETE)[^"\']*\{', "STATIC-SQLI-002", "SQL query built with string interpolation", "injection", 9.0),
     (r'SSL_VERIFY\s*=\s*False|verify\s*=\s*False', "STATIC-TLS-001", "TLS/SSL verification disabled", "crypto", 7.4),
     (r'DEBUG\s*=\s*True', "STATIC-CONFIG-001", "Debug mode enabled — may expose stack traces", "config", 5.3),
     (r'\bSECRET_KEY\s*=\s*["\'][^"\']{1,20}["\']', "STATIC-SECRET-001", "Short or default SECRET_KEY", "secrets", 7.5),
-    (r'render_template_string\s*\(.*\+', "STATIC-SSTI-001", "Potential Server-Side Template Injection", "injection", 9.0),
+    (r'render_template_string\s*\(\s*template\s*\)', "STATIC-SSTI-001", "Potential Server-Side Template Injection", "injection", 9.0),
+    (r'render_template_string\s*\([^)]*(request\.(args|form|values|get_json)|\+)', "STATIC-SSTI-002", "Potential Server-Side Template Injection via user input", "injection", 9.0),
+    (r'\bos\.popen\s*\(', "STATIC-CMDINJECT-003", "os.popen() call — command injection risk", "injection", 8.8),
+    (r'\bsubprocess\.(run|call|Popen)\s*\([^)]*(request\.(args|form|values|get_json)|input\s*\()', "STATIC-CMDINJECT-004", "subprocess call uses likely user-controlled input", "injection", 9.0),
     (r'__import__\s*\(', "STATIC-IMPORT-001", "Dynamic __import__() usage", "injection", 7.2),
     (r'open\s*\([^)]*["\'][rwab]{1,3}["\']', "STATIC-PATH-001", "File open — verify path is not user-controlled", "path_traversal", 5.5),
 ]
+
+
+def _safe_compile_regex(pattern: str) -> Optional[re.Pattern[str]]:
+    """Compile regex safely; recover from misplaced inline flags like (?i) in the middle."""
+    try:
+        return re.compile(pattern, re.IGNORECASE | re.MULTILINE)
+    except re.error:
+        cleaned = re.sub(r"\(\?[aiLmsux-]+\)", "", pattern)
+        try:
+            return re.compile(cleaned, re.IGNORECASE | re.MULTILINE)
+        except re.error:
+            return None
 
 
 def _run_bandit_on_python(code: str, filename: str) -> list[dict]:
@@ -151,28 +169,58 @@ def _scan_with_regex(code: str, filename: str) -> list[dict]:
     lines = code.split("\n")
 
     for pattern, rule_id, title, category, cvss in DANGEROUS_PATTERNS:
-        for i, line in enumerate(lines, 1):
-            if re.search(pattern, line):
-                findings.append({
-                    "rule_id": rule_id,
-                    "title": title,
-                    "description": f"Pattern detected: {title}. Line content: {line.strip()[:200]}",
-                    "file_path": filename,
-                    "line_start": i,
-                    "line_end": i,
-                    "code_snippet": line.strip(),
-                    "severity": _cvss_to_severity(cvss),
-                    "cvss_score": cvss,
-                    "confidence": "medium",
-                    "category": category,
-                    "why_flagged": f"The regex pattern for '{rule_id}' matched this line. {title}.",
-                    "business_risk": _generate_business_risk(rule_id.split("-")[1] if "-" in rule_id else rule_id, _cvss_to_severity(cvss)),
-                    "recommendation": "Review this code for security implications. If user input can reach this call, sanitize and validate it first.",
-                    "references": [],
-                    "source": "regex",
-                })
+        compiled = _safe_compile_regex(pattern)
+        if not compiled:
+            continue
+
+        seen_lines: set[int] = set()
+        for match in compiled.finditer(code):
+            i = code.count("\n", 0, match.start()) + 1
+            if i in seen_lines:
+                continue
+            seen_lines.add(i)
+            line = lines[i - 1] if 0 <= i - 1 < len(lines) else ""
+            findings.append({
+                "rule_id": rule_id,
+                "title": title,
+                "description": f"Pattern detected: {title}. Line content: {line.strip()[:200]}",
+                "file_path": filename,
+                "line_start": i,
+                "line_end": i,
+                "code_snippet": line.strip(),
+                "severity": _cvss_to_severity(cvss),
+                "cvss_score": cvss,
+                "confidence": "medium",
+                "category": category,
+                "why_flagged": f"The regex pattern for '{rule_id}' matched this line. {title}.",
+                "business_risk": _generate_business_risk(rule_id.split("-")[1] if "-" in rule_id else rule_id, _cvss_to_severity(cvss)),
+                "recommendation": "Review this code for security implications. If user input can reach this call, sanitize and validate it first.",
+                "references": [],
+                "source": "regex",
+            })
 
     return findings
+
+
+def _build_semantic_payload(ctx: AgentContext) -> str:
+    """Build semantic analysis input for both PR and manual scans."""
+    if ctx.diff_content and len(ctx.diff_content.strip()) > 50:
+        return f"DIFF:\n{ctx.diff_content[:12000]}"
+
+    chunks: list[str] = []
+    budget = 12000
+    for path, content in list(ctx.file_contents.items())[:12]:
+        if not content:
+            continue
+        block = f"--- {path} ---\n{content[:2000]}\n"
+        if len(block) > budget:
+            break
+        chunks.append(block)
+        budget -= len(block)
+        if budget < 500:
+            break
+
+    return "CHANGED FILES:\n" + "\n".join(chunks)
 
 
 def _scan_secrets(code: str, filename: str) -> list[dict]:
@@ -240,6 +288,7 @@ class StaticAnalysisAgent(BaseAgent):
         tokens_used = 0
         ai_provider = None
         ai_model = None
+        analysis_summary = "Tool-based static analysis completed."
 
         # ── Phase 1: Tool-based analysis per file ──────────────────
         python_files: dict[str, str] = {}
@@ -261,11 +310,10 @@ class StaticAnalysisAgent(BaseAgent):
             secret_findings = _scan_secrets(content, path)
             all_findings.extend(secret_findings)
 
-        # ── Phase 2: LLM semantic analysis on diff ─────────────────
-        # Only run semantic analysis if we have diff content to analyze
-        if ctx.diff_content and len(ctx.diff_content.strip()) > 50:
+        # ── Phase 2: LLM semantic analysis on diff/files ───────────
+        semantic_input = _build_semantic_payload(ctx)
+        if semantic_input.strip() and semantic_input.strip() != "CHANGED FILES:":
             try:
-                diff_excerpt = ctx.diff_content[:8000]  # Stay within context window
                 req = model_router.ModelRequest(
                     system_prompt=STATIC_ANALYSIS_SYSTEM,
                     prompt=f"""Analyze this code diff for security vulnerabilities. Apply your deep reasoning — look for semantic issues that static tools miss.
@@ -273,8 +321,8 @@ class StaticAnalysisAgent(BaseAgent):
 Repository: {ctx.repo_full_name}
 Language: {ctx.repo_language or 'unknown'}
 
-DIFF:
-{diff_excerpt}
+CODE INPUT:
+{semantic_input}
 
 Previously detected by static tools (do not duplicate, but you may add context):
 {json.dumps([f['rule_id'] for f in all_findings], indent=2)[:500]}
@@ -290,12 +338,17 @@ Now perform your semantic analysis:""",
                     f["agent_type"] = "static"
                 all_findings.extend(llm_findings)
                 tokens_used = response.get("_tokens", 0)
+                ai_provider = response.get("_provider")
+                ai_model = response.get("_model")
+                analysis_summary = response.get("analysis_summary", analysis_summary)
 
             except model_router.ModelUnavailableError as exc:
                 log.warning("LLM unavailable for semantic analysis — static tool results still valid", error=str(exc))
                 # Do NOT fail the whole agent — Bandit + regex results are still real and useful
+                analysis_summary = f"LLM semantic pass unavailable: {exc}. Returned deterministic static results only."
             except Exception as exc:
                 log.error("LLM semantic analysis error", error=str(exc))
+                analysis_summary = f"LLM semantic pass failed with error: {exc}. Returned deterministic static results only."
 
         # ── Phase 3: Deduplicate and enrich ────────────────────────
         seen_fingerprints: set[str] = set()
@@ -334,7 +387,13 @@ Now perform your semantic analysis:""",
             tokens_used=tokens_used,
             ai_provider=ai_provider,
             ai_model=ai_model,
-            extra={"files_analyzed": list(ctx.file_contents.keys())},
+            extra={
+                "files_analyzed": list(ctx.file_contents.keys()),
+                "analysis_summary": analysis_summary,
+                "llm_enabled": True,
+                "llm_provider": ai_provider,
+                "llm_model": ai_model,
+            },
         )
 
     def _has_auto_fix(self, rule_id: str) -> bool:

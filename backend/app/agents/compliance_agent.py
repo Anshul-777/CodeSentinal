@@ -222,53 +222,79 @@ ALL_RULES = {
 }
 
 
+def _compile_pattern(pattern: str) -> Optional[re.Pattern[str]]:
+    """Compile regex robustly, recovering from misplaced inline flags."""
+    try:
+        return re.compile(pattern, re.IGNORECASE | re.MULTILINE | re.DOTALL)
+    except re.error:
+        cleaned = re.sub(r"\(\?[aiLmsux-]+\)", "", pattern)
+        try:
+            return re.compile(cleaned, re.IGNORECASE | re.MULTILINE | re.DOTALL)
+        except re.error:
+            return None
+
+
 def _check_rule_in_content(rule: ComplianceRule, content: str, file_path: str) -> Optional[dict]:
     """Check a single compliance rule against file content using regex patterns."""
     lines = content.split("\n")
-    for i, line in enumerate(lines, 1):
-        for pattern in rule.violation_patterns:
-            if re.search(pattern, line, re.IGNORECASE):
-                # Check if safe pattern also present (reduces false positives)
-                context = "\n".join(lines[max(0, i-3):min(len(lines), i+3)])
-                for safe in rule.safe_patterns:
-                    if re.search(safe, context, re.IGNORECASE):
-                        continue  # Safe pattern present — likely not a violation
+    for pattern in rule.violation_patterns:
+        compiled = _compile_pattern(pattern)
+        if not compiled:
+            log.warning("Skipping invalid compliance pattern", rule_id=rule.id, pattern=pattern)
+            continue
 
-                fp_input = f"{rule.id}:{file_path}:{i}"
-                return {
+        for match in compiled.finditer(content):
+            line_start = content.count("\n", 0, match.start()) + 1
+            line_end = content.count("\n", 0, match.end()) + 1
+            idx = max(0, line_start - 1)
+            line = lines[idx] if idx < len(lines) else ""
+
+            # Check safe patterns in nearby context to reduce false positives.
+            context = "\n".join(lines[max(0, line_start - 4):min(len(lines), line_end + 3)])
+            safe_present = False
+            for safe in rule.safe_patterns:
+                safe_compiled = _compile_pattern(safe)
+                if safe_compiled and safe_compiled.search(context):
+                    safe_present = True
+                    break
+            if safe_present:
+                continue
+
+            fp_input = f"{rule.id}:{file_path}:{line_start}"
+            return {
+                "rule_id": rule.id,
+                "title": rule.title,
+                "description": rule.check_description,
+                "why_flagged": (
+                    f"Compliance rule {rule.id} ({rule.clause}) was triggered by a pattern match at {file_path}:{line_start}. "
+                    f"{rule.check_description} The matched pattern suggests {rule.title.lower()}."
+                ),
+                "business_risk": (
+                    f"This {rule.framework.upper()} violation ({rule.clause}: {rule.title}) may result in "
+                    f"regulatory penalties, audit failures, or data breach liability. "
+                    f"GDPR fines can reach EUR 20M or 4% of global turnover. PCI-DSS violations can result in fines of $5,000 to $100,000 per month."
+                ),
+                "recommendation": f"Remediate to comply with {rule.framework.upper()} {rule.clause}: {rule.check_description}",
+                "file_path": file_path,
+                "line_start": line_start,
+                "line_end": line_end,
+                "code_snippet": line.strip(),
+                "severity": rule.severity,
+                "cvss_score": rule.cvss,
+                "confidence": "medium",
+                "category": "compliance",
+                "agent_type": "compliance",
+                "compliance_frameworks": [f"{rule.framework}:{rule.clause}"],
+                "compliance_details": {
+                    "framework": rule.framework,
+                    "clause": rule.clause,
+                    "requirement": rule.check_description,
                     "rule_id": rule.id,
-                    "title": rule.title,
-                    "description": rule.check_description,
-                    "why_flagged": (
-                        f"Compliance rule {rule.id} ({rule.clause}) was triggered by a pattern match at {file_path}:{i}. "
-                        f"{rule.check_description} The matched pattern suggests {rule.title.lower()}."
-                    ),
-                    "business_risk": (
-                        f"This {rule.framework.upper()} violation ({rule.clause}: {rule.title}) may result in "
-                        f"regulatory penalties, audit failures, or data breach liability. "
-                        f"GDPR fines can reach €20M or 4% of global turnover. PCI-DSS violations can result in fines of $5,000–$100,000/month."
-                    ),
-                    "recommendation": f"Remediate to comply with {rule.framework.upper()} {rule.clause}: {rule.check_description}",
-                    "file_path": file_path,
-                    "line_start": i,
-                    "line_end": i,
-                    "code_snippet": line.strip(),
-                    "severity": rule.severity,
-                    "cvss_score": rule.cvss,
-                    "confidence": "medium",
-                    "category": "compliance",
-                    "agent_type": "compliance",
-                    "compliance_frameworks": [f"{rule.framework}:{rule.clause}"],
-                    "compliance_details": {
-                        "framework": rule.framework,
-                        "clause": rule.clause,
-                        "requirement": rule.check_description,
-                        "rule_id": rule.id,
-                    },
-                    "fingerprint": hashlib.sha256(fp_input.encode()).hexdigest()[:16],
-                    "fix_available": False,
-                    "fix_complexity": "moderate",
-                }
+                },
+                "fingerprint": hashlib.sha256(fp_input.encode()).hexdigest()[:16],
+                "fix_available": False,
+                "fix_complexity": "moderate",
+            }
     return None
 
 
@@ -279,6 +305,10 @@ class ComplianceAgent(BaseAgent):
     async def run(self, ctx: AgentContext) -> AgentResult:
         all_findings: list[dict] = []
         compliance_results: dict[str, dict] = {}
+        analysis_summary = "Rule-based compliance checks executed successfully."
+        tokens_used = 0
+        ai_provider = None
+        ai_model = None
 
         active_profiles = ctx.compliance_profiles or list(ALL_RULES.keys())
         # Default to checking all frameworks if none configured
@@ -319,7 +349,23 @@ class ComplianceAgent(BaseAgent):
             all_findings.extend(profile_findings)
 
         # ── Phase 2: LLM-based compliance review for nuanced checks ─
-        if ctx.diff_content and len(ctx.diff_content.strip()) > 50:
+        llm_input = ctx.diff_content[:6000] if ctx.diff_content else ""
+        if not llm_input.strip() and ctx.file_contents:
+            chunks: list[str] = []
+            budget = 6000
+            for path, content in list(ctx.file_contents.items())[:8]:
+                if not content:
+                    continue
+                block = f"--- {path} ---\n{content[:1200]}\n"
+                if len(block) > budget:
+                    break
+                chunks.append(block)
+                budget -= len(block)
+                if budget < 300:
+                    break
+            llm_input = "\n".join(chunks)
+
+        if llm_input.strip():
             try:
                 profiles_str = ", ".join(p.upper().replace("_", "-") for p in profiles_to_check)
                 req = model_router.ModelRequest(
@@ -327,8 +373,8 @@ class ComplianceAgent(BaseAgent):
                     prompt=f"""Review this code diff for compliance violations.
 Active compliance frameworks: {profiles_str}
 
-DIFF:
-{ctx.diff_content[:6000]}
+CODE INPUT:
+{llm_input}
 
 Rule-based analysis already found {len(all_findings)} potential violations.
 Identify any additional compliance issues that pattern matching may have missed.
@@ -352,6 +398,11 @@ Focus on semantic compliance gaps — missing audit trails, improper data handli
                     ).hexdigest()[:16])
                     all_findings.append(f)
 
+                tokens_used = response.get("_tokens", 0)
+                ai_provider = response.get("_provider")
+                ai_model = response.get("_model")
+                analysis_summary = response.get("analysis_summary", analysis_summary)
+
                 # Merge LLM scores into rule-based scores
                 for profile, llm_score in llm_scores.items():
                     if profile in compliance_results:
@@ -361,8 +412,10 @@ Focus on semantic compliance gaps — missing audit trails, improper data handli
 
             except model_router.ModelUnavailableError as exc:
                 log.warning("Compliance LLM review skipped — no provider available", error=str(exc))
+                analysis_summary = f"LLM compliance review unavailable: {exc}. Returned rule-based compliance checks only."
             except Exception as exc:
                 log.error("Compliance LLM review error", error=str(exc))
+                analysis_summary = f"LLM compliance review failed with error: {exc}. Returned rule-based compliance checks only."
 
         log.info(
             "Compliance check complete",
@@ -375,5 +428,15 @@ Focus on semantic compliance gaps — missing audit trails, improper data handli
             agent_name=self.name,
             success=True,
             findings=all_findings,
-            extra={"compliance_results": compliance_results, "profiles_checked": profiles_to_check},
+            tokens_used=tokens_used,
+            ai_provider=ai_provider,
+            ai_model=ai_model,
+            extra={
+                "compliance_results": compliance_results,
+                "profiles_checked": profiles_to_check,
+                "analysis_summary": analysis_summary,
+                "llm_enabled": True,
+                "llm_provider": ai_provider,
+                "llm_model": ai_model,
+            },
         )

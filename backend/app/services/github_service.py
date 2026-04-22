@@ -207,6 +207,39 @@ async def fetch_repository_manifests(
     return manifests
 
 
+async def list_repository_files(
+    installation_id: str,
+    repo_full_name: str,
+    ref: str = "HEAD",
+) -> list[str]:
+    """List repository files recursively using the Git tree API."""
+    headers = await get_authenticated_headers(installation_id)
+
+    async with httpx.AsyncClient(timeout=25.0) as client:
+        # Resolve branch/tag to commit SHA first.
+        ref_resp = await client.get(
+            f"{GITHUB_API}/repos/{repo_full_name}/git/ref/heads/{ref}",
+            headers=headers,
+        )
+        if ref_resp.status_code == 404:
+            # Try direct commit SHA usage.
+            commit_sha = ref
+        else:
+            ref_resp.raise_for_status()
+            commit_sha = (ref_resp.json().get("object") or {}).get("sha")
+            if not commit_sha:
+                return []
+
+        tree_resp = await client.get(
+            f"{GITHUB_API}/repos/{repo_full_name}/git/trees/{commit_sha}",
+            headers=headers,
+            params={"recursive": 1},
+        )
+        tree_resp.raise_for_status()
+        tree = tree_resp.json().get("tree", [])
+        return [item.get("path", "") for item in tree if item.get("type") == "blob" and item.get("path")]
+
+
 async def create_check_run(
     installation_id: str,
     repo_full_name: str,

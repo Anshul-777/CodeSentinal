@@ -208,6 +208,10 @@ class DependencyAgent(BaseAgent):
     async def run(self, ctx: AgentContext) -> AgentResult:
         all_findings: list[dict] = []
         sbom_entries: list[dict] = []
+        tokens_used = 0
+        ai_provider = None
+        ai_model = None
+        analysis_summary = "Dependency CVE and license checks completed."
 
         # ── Parse all manifests ────────────────────────────────────
         all_packages: list[dict] = []
@@ -364,6 +368,78 @@ class DependencyAgent(BaseAgent):
 
         await asyncio.gather(*[check_package(pkg) for pkg in all_packages])
 
+        # ── Deduplicate deterministic findings first ──────────────
+        deduped: list[dict] = []
+        seen_keys: set[tuple[str, str, str, str, str]] = set()
+        for finding in all_findings:
+            key = (
+                str(finding.get("dependency_name") or ""),
+                str(finding.get("dependency_version") or ""),
+                str(finding.get("cve_id") or finding.get("rule_id") or ""),
+                str(finding.get("file_path") or ""),
+                str(finding.get("category") or ""),
+            )
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            deduped.append(finding)
+        all_findings = deduped
+
+        # ── LLM pass: semantic dependency risk review ─────────────
+        try:
+            llm_req = model_router.ModelRequest(
+                system_prompt=DEPENDENCY_AGENT_SYSTEM,
+                prompt=f"""Analyze this dependency inventory and vulnerability set.
+
+Repository: {ctx.repo_full_name}
+Detected packages: {len(all_packages)}
+
+Packages:
+{json.dumps(all_packages[:120], indent=2)[:9000]}
+
+Current findings:
+{json.dumps(all_findings[:120], indent=2)[:9000]}
+
+Return additional dependency findings only if they are materially different from existing ones.
+Do not duplicate existing CVEs for the same package/version/file.
+""",
+                temperature=0.05,
+                max_tokens=2500,
+            )
+            llm_response = await model_router.complete_json(
+                llm_req,
+                preferred_provider=ctx.ai_provider,
+                preferred_model=ctx.ai_model,
+            )
+
+            ai_provider = llm_response.get("_provider")
+            ai_model = llm_response.get("_model")
+            tokens_used = llm_response.get("_tokens", 0)
+            analysis_summary = llm_response.get("analysis_summary", analysis_summary)
+
+            llm_findings = llm_response.get("findings", [])
+            for f in llm_findings:
+                if not isinstance(f, dict) or not f.get("title"):
+                    continue
+                f.setdefault("agent_type", "dependency")
+                f.setdefault("category", "vulnerable_dependency")
+                key = (
+                    str(f.get("dependency_name") or ""),
+                    str(f.get("dependency_version") or ""),
+                    str(f.get("cve_id") or f.get("rule_id") or ""),
+                    str(f.get("file_path") or ""),
+                    str(f.get("category") or ""),
+                )
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                all_findings.append(f)
+
+        except model_router.ModelUnavailableError as exc:
+            analysis_summary = f"LLM dependency review unavailable: {exc}. Returned OSV/license results only."
+        except Exception as exc:
+            analysis_summary = f"LLM dependency review failed with error: {exc}. Returned OSV/license results only."
+
         log.info(
             "Dependency scan complete",
             scan_id=ctx.scan_id,
@@ -375,7 +451,17 @@ class DependencyAgent(BaseAgent):
             agent_name=self.name,
             success=True,
             findings=all_findings,
-            extra={"packages_scanned": len(all_packages), "sbom": sbom_entries},
+            tokens_used=tokens_used,
+            ai_provider=ai_provider,
+            ai_model=ai_model,
+            extra={
+                "packages_scanned": len(all_packages),
+                "sbom": sbom_entries,
+                "analysis_summary": analysis_summary,
+                "llm_enabled": True,
+                "llm_provider": ai_provider,
+                "llm_model": ai_model,
+            },
         )
 
 

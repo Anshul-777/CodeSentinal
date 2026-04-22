@@ -75,6 +75,7 @@ class BusinessLogicAgent(BaseAgent):
         tokens_used = 0
         ai_provider = None
         ai_model = None
+        analysis_summary = "LLM business-logic analysis completed."
 
         try:
             req = model_router.ModelRequest(
@@ -90,6 +91,10 @@ class BusinessLogicAgent(BaseAgent):
             )
 
             raw_findings = response_dict.get("findings", [])
+            tokens_used = response_dict.get("_tokens", 0)
+            ai_provider = response_dict.get("_provider")
+            ai_model = response_dict.get("_model")
+            analysis_summary = response_dict.get("analysis_summary", analysis_summary)
 
         except model_router.ModelUnavailableError as exc:
             log.warning(
@@ -143,4 +148,10 @@ class BusinessLogicAgent(BaseAgent):
             tokens_used=tokens_used,
             ai_provider=ai_provider,
             ai_model=ai_model,
+            extra={
+                "analysis_summary": analysis_summary,
+                "llm_enabled": True,
+                "llm_provider": ai_provider,
+                "llm_model": ai_model,
+            },
         )

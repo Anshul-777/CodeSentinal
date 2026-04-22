@@ -179,3 +179,21 @@ After updating GitHub App settings above, test:
 - Keep DATABASE_URL unchanged (Render external Postgres URL).
 - Keep GITHUB_WEBHOOK_URL pointing to Render backend while backend stays on Render.
 - FRONTEND_URL and ALLOWED_ORIGINS must be real deployed frontend URL in production.
+
+
+
+
+
+
+
+
+
+
+
+
+I want you to go to github, make a fake profile, add the current test repo there, go to our code sentinal platform, connect  that github account it to the code sentinal, and test all real features, when i scan. It flipping success and put in queue, it ran for literallly 6 hours and no rests came.  I didnt see any issue, but the queue not workinng, is it the worker issue or what ?       
+
+so go and check, at  
+"https://code-sentinal-chi.vercel.app/" , "https://codesentinal-ty40.onrender.com/"         
+
+see image, it's been calculating since morning. and no results, aren't the agents working. 

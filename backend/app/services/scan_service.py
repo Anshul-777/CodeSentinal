@@ -32,6 +32,7 @@ from app.services.github_service import (
     fetch_pr_changed_files,
     fetch_file_content,
     fetch_repository_manifests,
+    list_repository_files,
     create_check_run,
     update_check_run,
     post_pr_review,
@@ -62,6 +63,36 @@ def _risk_level(score: int) -> str:
     elif score > 0:
         return "low"
     return "none"
+
+
+def _deduplicate_findings(findings: list[dict]) -> list[dict]:
+    """Remove duplicate findings emitted by different sources for the same issue."""
+    deduped: list[dict] = []
+    seen: set[tuple[str, str, str, str, str, str]] = set()
+    for f in findings:
+        key = (
+            str(f.get("agent_type") or ""),
+            str(f.get("rule_id") or ""),
+            str(f.get("cve_id") or ""),
+            str(f.get("dependency_name") or ""),
+            str(f.get("file_path") or ""),
+            str(f.get("line_start") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(f)
+    return deduped
+
+
+def _is_likely_source_file(path: str) -> bool:
+    ext = path.lower().rsplit(".", 1)
+    if len(ext) < 2:
+        return False
+    return ext[-1] in {
+        "py", "js", "jsx", "ts", "tsx", "java", "go", "rb", "php", "cs", "rs", "swift", "kt", "kts",
+        "c", "cc", "cpp", "h", "hpp", "scala", "sql", "vue", "svelte",
+    }
 
 
 async def run_scan_pipeline(scan_id: str) -> None:
@@ -99,6 +130,7 @@ async def run_scan_pipeline(scan_id: str) -> None:
     github_fetch_errors: list[str] = []
 
     try:
+        analysis_ref = scan.commit_sha or scan.branch or repo.default_branch or "main"
         if repo.installation_id:
             # Create a pending check run on GitHub
             if repo.has_check_access and scan.commit_sha:
@@ -141,7 +173,7 @@ async def run_scan_pipeline(scan_id: str) -> None:
                         if path and not _should_skip_file(path):
                             content = await fetch_file_content(
                                 repo.installation_id, repo.full_name, path,
-                                ref=scan.commit_sha or "HEAD",
+                                ref=analysis_ref,
                             )
                             if content:
                                 file_contents[path] = content
@@ -153,7 +185,7 @@ async def run_scan_pipeline(scan_id: str) -> None:
             try:
                 manifests = await fetch_repository_manifests(
                     repo.installation_id, repo.full_name,
-                    ref=scan.commit_sha or "HEAD",
+                    ref=analysis_ref,
                 )
             except GitHubAppError as exc:
                 log.warning("Could not fetch manifests", scan_id=scan_id, error=str(exc))
@@ -163,14 +195,37 @@ async def run_scan_pipeline(scan_id: str) -> None:
             if not scan.pr_number:
                 try:
                     log.info("Manual scan: fetching common top-level files", scan_id=scan_id)
-                    # For now, let's just fetch a few common ones to start with
-                    # A better implementation would be to list the repo tree.
-                    common_files = ["app.py", "main.py", "index.js", "src/index.js", "server.js"]
-                    for path in common_files:
-                        if path not in manifests:
+                    repo_files = await list_repository_files(
+                        repo.installation_id,
+                        repo.full_name,
+                        ref=analysis_ref,
+                    )
+
+                    source_candidates = [
+                        p for p in repo_files
+                        if p and _is_likely_source_file(p) and not _should_skip_file(p)
+                    ]
+
+                    for path in source_candidates[:30]:
+                        content = await fetch_file_content(
+                            repo.installation_id,
+                            repo.full_name,
+                            path,
+                            ref=analysis_ref,
+                        )
+                        if content:
+                            file_contents[path] = content
+
+                    # Fallback for tiny repos if tree listing is restricted.
+                    if not file_contents:
+                        for path in ["app.py", "main.py", "index.js", "src/index.js", "server.js"]:
+                            if path in file_contents:
+                                continue
                             content = await fetch_file_content(
-                                repo.installation_id, repo.full_name, path,
-                                ref=scan.commit_sha or "HEAD",
+                                repo.installation_id,
+                                repo.full_name,
+                                path,
+                                ref=analysis_ref,
                             )
                             if content:
                                 file_contents[path] = content
@@ -290,6 +345,9 @@ async def run_scan_pipeline(scan_id: str) -> None:
             # Carry extra data (SBOM, compliance scores)
             if result.extra:
                 agent_results_summary[agent_name].update(result.extra)
+
+    # Dedupe across agents before auto-fix and persistence.
+    all_findings = _deduplicate_findings(all_findings)
 
     # ── Run Agent 4 (Auto-Fix) with all upstream findings ──────────
     ctx.upstream_results = {
