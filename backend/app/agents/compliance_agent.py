@@ -226,21 +226,13 @@ def _compile_pattern(pattern: str) -> Optional[re.Pattern[str]]:
     """Compile regex robustly, recovering from misplaced inline flags."""
     try:
         # Move any (?i), (?m), etc. to the start of the string to avoid re.error in Python 3.11+
-        if pattern.startswith("(?") and ")" in pattern:
-            # Already has a flag at the start, or it's a group. 
-            pass
-        elif "(?" in pattern:
-            # Potentially has an inline flag in the middle. 
-            # This is a naive check but helps with the reported crash.
-            # We'll just rely on the re.IGNORECASE passed to compile in the first try.
-            pass
-            
-        return re.compile(pattern, re.IGNORECASE | re.MULTILINE | re.DOTALL)
+        # If any inline flags exist, we strip them and apply them globally for safety.
+        cleaned = re.sub(r'\(\?[imsux-]+\)', '', pattern)
+        return re.compile(cleaned, re.IGNORECASE | re.MULTILINE | re.DOTALL)
     except re.error:
-        # Strip all inline flags and try again
-        cleaned = re.sub(r"\(\?[aiLmsux-]+\)", "", pattern)
+        # Last resort fallback: try to compile the raw pattern and let it fail if it must
         try:
-            return re.compile(cleaned, re.IGNORECASE | re.MULTILINE | re.DOTALL)
+            return re.compile(pattern, re.IGNORECASE)
         except re.error:
             log.error("Failed to compile regex even after cleaning", pattern=pattern)
             return None
