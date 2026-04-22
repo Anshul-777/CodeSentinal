@@ -166,6 +166,20 @@ def _generate_business_risk(test_id: str, severity: str) -> str:
     return risks.get(test_id, default)
 
 
+def _safe_compile_regex(pattern: str) -> Optional[re.Pattern[str]]:
+    """Compile regex robustly, removing misplaced inline flags like (?i) for Python 3.11+."""
+    try:
+        # Remove mid-string inline flags: converting `(?i)` to global `re.IGNORECASE`
+        cleaned = re.sub(r'\(\?[imsux-]+\)', '', pattern)
+        return re.compile(cleaned, re.IGNORECASE | re.MULTILINE | re.DOTALL)
+    except re.error as exc:
+        log.error("Failed to compile pattern", pattern=pattern, error=str(exc))
+        try:
+            return re.compile(pattern, re.IGNORECASE)
+        except re.error:
+            return None
+
+
 def _scan_with_regex(code: str, filename: str) -> list[dict]:
     """Regex-based scanner for cross-language dangerous patterns."""
     findings = []
