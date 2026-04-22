@@ -70,6 +70,8 @@ DANGEROUS_PATTERNS: list[tuple[str, str, str, str, float]] = [
     (r'\bsubprocess\.(run|call|Popen)\s*\([^)]*(request\.(args|form|values|get_json)|input\s*\()', "STATIC-CMDINJECT-004", "subprocess call uses likely user-controlled input", "injection", 9.0),
     (r'__import__\s*\(', "STATIC-IMPORT-001", "Dynamic __import__() usage", "injection", 7.2),
     (r'open\s*\([^)]*["\'][rwab]{1,3}["\']', "STATIC-PATH-001", "File open — verify path is not user-controlled", "path_traversal", 5.5),
+    (r'\b(query|sql)\s*=\s*f?["\'].*\{.*\}', "STATIC-SQLI-003", "Latent SQL injection — query built with interpolation", "injection", 8.5),
+    (r'\b(cmd|command)\s*=\s*f?["\'].*\{.*\}', "STATIC-CMDINJECT-005", "Latent command injection — command string built with interpolation", "injection", 8.5),
 ]
 
 
@@ -205,22 +207,31 @@ def _scan_with_regex(code: str, filename: str) -> list[dict]:
 def _build_semantic_payload(ctx: AgentContext) -> str:
     """Build semantic analysis input for both PR and manual scans."""
     if ctx.diff_content and len(ctx.diff_content.strip()) > 50:
-        return f"DIFF:\n{ctx.diff_content[:12000]}"
+        return f"DIFF:\n{ctx.diff_content[:15000]}"
 
     chunks: list[str] = []
-    budget = 12000
-    for path, content in list(ctx.file_contents.items())[:12]:
+    budget = 15000
+    # Prioritize likely source files
+    likely_files = sorted(
+        ctx.file_contents.items(),
+        key=lambda x: (not x[0].endswith((".py", ".js", ".ts", ".go")), x[0])
+    )
+    
+    for path, content in likely_files[:15]:
         if not content:
             continue
-        block = f"--- {path} ---\n{content[:2000]}\n"
+        block = f"--- PATH: {path} ---\n{content[:3000]}\n"
         if len(block) > budget:
+            # Try to get at least the first part of the file
+            block = f"--- PATH: {path} (partial) ---\n{content[:budget]}\n"
+            chunks.append(block)
             break
         chunks.append(block)
         budget -= len(block)
         if budget < 500:
             break
 
-    return "CHANGED FILES:\n" + "\n".join(chunks)
+    return "CODE REPOSITORY CONTEXT:\n" + "\n".join(chunks)
 
 
 def _scan_secrets(code: str, filename: str) -> list[dict]:
@@ -341,6 +352,13 @@ Now perform your semantic analysis:""",
                 ai_provider = response.get("_provider")
                 ai_model = response.get("_model")
                 analysis_summary = response.get("analysis_summary", analysis_summary)
+
+                # ── Phase 2b: Additional Secrets Check ───────
+                if response.get("secrets"):
+                    for s in response["secrets"]:
+                        s["source"] = "llm_secret"
+                        s["agent_type"] = "static"
+                        all_findings.append(s)
 
             except model_router.ModelUnavailableError as exc:
                 log.warning("LLM unavailable for semantic analysis — static tool results still valid", error=str(exc))

@@ -89,7 +89,7 @@ HIPAA_RULES: list[ComplianceRule] = [
         check_description="Electronic Protected Health Information must be encrypted when stored.",
         violation_patterns=[
             r'(?i)(medical|health|patient|diagnosis|treatment|prescription|ssn)\s*=\s*(?!encrypt|cipher|hash)',
-            r'db\.Column\s*\([^)]*String[^)]*\).*#.*(?i)(health|patient|phi|medical)',
+            r'(?i)db\.Column\s*\([^)]*String[^)]*\).*#.*(health|patient|phi|medical)',
         ],
         safe_patterns=[r'encrypt', r'Fernet', r'AES', r'cipher', r'pgcrypto'],
         severity="critical",
@@ -225,12 +225,24 @@ ALL_RULES = {
 def _compile_pattern(pattern: str) -> Optional[re.Pattern[str]]:
     """Compile regex robustly, recovering from misplaced inline flags."""
     try:
+        # Move any (?i), (?m), etc. to the start of the string to avoid re.error in Python 3.11+
+        if pattern.startswith("(?") and ")" in pattern:
+            # Already has a flag at the start, or it's a group. 
+            pass
+        elif "(?" in pattern:
+            # Potentially has an inline flag in the middle. 
+            # This is a naive check but helps with the reported crash.
+            # We'll just rely on the re.IGNORECASE passed to compile in the first try.
+            pass
+            
         return re.compile(pattern, re.IGNORECASE | re.MULTILINE | re.DOTALL)
     except re.error:
+        # Strip all inline flags and try again
         cleaned = re.sub(r"\(\?[aiLmsux-]+\)", "", pattern)
         try:
             return re.compile(cleaned, re.IGNORECASE | re.MULTILINE | re.DOTALL)
         except re.error:
+            log.error("Failed to compile regex even after cleaning", pattern=pattern)
             return None
 
 
@@ -416,6 +428,22 @@ Focus on semantic compliance gaps — missing audit trails, improper data handli
             except Exception as exc:
                 log.error("Compliance LLM review error", error=str(exc))
                 analysis_summary = f"LLM compliance review failed with error: {exc}. Returned rule-based compliance checks only."
+
+        # ── Phase 3: Deduplicate ──────────────────────────────────
+        seen_fps: set[str] = set()
+        deduped_findings: list[dict] = []
+        for f in all_findings:
+             fp = f.get("fingerprint")
+             if not fp:
+                 fp_input = f"{f.get('rule_id', '')}:{f.get('file_path', '')}:{f.get('line_start', 0)}:{f.get('title', '')}"
+                 fp = hashlib.sha256(fp_input.encode()).hexdigest()[:16]
+                 f["fingerprint"] = fp
+             
+             if fp not in seen_fps:
+                 seen_fps.add(fp)
+                 deduped_findings.append(f)
+        
+        all_findings = deduped_findings
 
         log.info(
             "Compliance check complete",

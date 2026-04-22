@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import time
 import uuid
+import traceback
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, List, Any
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -67,21 +69,25 @@ def _risk_level(score: int) -> str:
 
 def _deduplicate_findings(findings: list[dict]) -> list[dict]:
     """Remove duplicate findings emitted by different sources for the same issue."""
+    seen_fingerprints: set[str] = set()
     deduped: list[dict] = []
-    seen: set[tuple[str, str, str, str, str, str]] = set()
+
     for f in findings:
-        key = (
-            str(f.get("agent_type") or ""),
-            str(f.get("rule_id") or ""),
-            str(f.get("cve_id") or ""),
-            str(f.get("dependency_name") or ""),
-            str(f.get("file_path") or ""),
-            str(f.get("line_start") or ""),
-        )
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(f)
+        # Generate semantic fingerprint if not present
+        fp = f.get("fingerprint")
+        if not fp:
+            # Create a deterministic key: path + line + title + raw code hash
+            code_bit = f.get("code_snippet", "")[:100].strip()
+            key_body = f"{f.get('file_path','')}:{f.get('line_start', 0)}:{f.get('title','')}:{code_bit}"
+            fp = hashlib.sha256(key_body.encode()).hexdigest()[:24]
+            f["fingerprint"] = fp
+
+        if fp not in seen_fingerprints:
+            seen_fingerprints.add(fp)
+            deduped.append(f)
+        else:
+            log.debug("Finding deduplicated", fp=fp, title=f.get("title"))
+
     return deduped
 
 
@@ -193,20 +199,53 @@ async def run_scan_pipeline(scan_id: str) -> None:
 
             # NEW: For manual scans, also fetch common top-level code files
             if not scan.pr_number:
-                try:
-                    log.info("Manual scan: fetching common top-level files", scan_id=scan_id)
-                    repo_files = await list_repository_files(
-                        repo.installation_id,
-                        repo.full_name,
-                        ref=analysis_ref,
-                    )
+                github_fetch_success = False
+                max_retries = 3
+                
+                for attempt in range(max_retries):
+                    try:
+                        log.info("Manual scan: fetching repo tree", scan_id=scan_id, attempt=attempt+1)
+                        repo_files = await list_repository_files(
+                            repo.installation_id,
+                            repo.full_name,
+                            ref=analysis_ref,
+                        )
 
-                    source_candidates = [
-                        p for p in repo_files
-                        if p and _is_likely_source_file(p) and not _should_skip_file(p)
-                    ]
+                        source_candidates = [
+                            p for p in repo_files
+                            if p and _is_likely_source_file(p) and not _should_skip_file(p)
+                        ]
 
-                    for path in source_candidates[:30]:
+                        if source_candidates:
+                            # Fetch content for candidates in parallel
+                            contents = await asyncio.gather(*[
+                                fetch_file_content(
+                                    repo.installation_id,
+                                    repo.full_name,
+                                    path,
+                                    ref=analysis_ref,
+                                )
+                                for path in source_candidates[:30]
+                            ], return_exceptions=True)
+
+                            for path, content in zip(source_candidates[:30], contents):
+                                if isinstance(content, str) and content.strip():
+                                    file_contents[path] = content
+                            
+                            if file_contents:
+                                github_fetch_success = True
+                                break
+                    except Exception as exc:
+                        log.warning("GitHub fetch attempt failed", attempt=attempt+1, error=str(exc))
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(2 ** attempt)
+
+                if not github_fetch_success:
+                    log.warning("All fetch attempts failed, trying hardcoded defaults", scan_id=scan_id)
+                    # Fallback for tiny repos if tree listing is restricted.
+                    for path in ["app.py", "main.py", "index.js", "src/index.js", "server.js"]:
+                        if path in file_contents:
+                            continue
                         content = await fetch_file_content(
                             repo.installation_id,
                             repo.full_name,
@@ -215,23 +254,6 @@ async def run_scan_pipeline(scan_id: str) -> None:
                         )
                         if content:
                             file_contents[path] = content
-
-                    # Fallback for tiny repos if tree listing is restricted.
-                    if not file_contents:
-                        for path in ["app.py", "main.py", "index.js", "src/index.js", "server.js"]:
-                            if path in file_contents:
-                                continue
-                            content = await fetch_file_content(
-                                repo.installation_id,
-                                repo.full_name,
-                                path,
-                                ref=analysis_ref,
-                            )
-                            if content:
-                                file_contents[path] = content
-                except Exception as exc:
-                    log.warning("Could not fetch common files for manual scan", scan_id=scan_id, error=str(exc))
-                    github_fetch_errors.append(str(exc))
 
     except Exception as exc:
         log.error("Fatal error fetching code from GitHub", scan_id=scan_id, error=str(exc), exc_info=True)

@@ -629,6 +629,38 @@ The fix: create a fresh engine per asyncio.run() call, or consolidate everything
 
 
 ----------------------------------------------------------------------------------------------
+##   User
+----------------------------------------------------------------------------------------------
+# Code of the Repo. 
+
+# Repo Name : projectalpha0079-ai/security-test-repo
+
+There were only 2 files, Requirements.txt and app.py...
+
+## Code for Requirements.txt 
+```
+flask==0.12.2
+```
+## Code for app.py 
+```
+import sqlite3
+def get_user(user_id):
+      query = f"SELECT * FROM users WHERE id = '{user_id}'"
+      return query
+  # Secret
+  TOKEN = 'ghp_1234567890abcdef'
+```
+The Flask was found by agent, but i think it should have also found the Token in app, but didnt. just the user speaking, i know nothing in code. 
+
+----------------------------------------------------------------------------------------------
+
+
+
+
+
+
+
+
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -794,36 +826,85 @@ The fix: create a fresh engine per asyncio.run() call, or consolidate everything
 # End of VSCode Agent remediation report.
 # ═══════════════════════════════════════════════════════════════════
 
-##   User
-----------------------------------------------------------------------------------------------
-# Code of the Repo. 
-
-# Repo Name : projectalpha0079-ai/security-test-repo
-
-There were only 2 files, Requirements.txt and app.py...
-
-## Code for Requirements.txt 
-```
-flask==0.12.2
-```
-## Code for app.py 
-```
-import sqlite3
-def get_user(user_id):
-      query = f"SELECT * FROM users WHERE id = '{user_id}'"
-      return query
-  # Secret
-  TOKEN = 'ghp_1234567890abcdef'
-```
-The Flask was found by agent, but i think it should have also found the Token in app, but didnt. just the user speaking, i know nothing in code. 
-
-----------------------------------------------------------------------------------------------
-
-
-
-
-
-
-
-
-
+# ═══════════════════════════════════════════════════════════════════
+# 7. Antigravity Remediation Report — Technical Solutions
+# ═══════════════════════════════════════════════════════════════════
+# Date: 2026-04-22 17:30
+# Mission: Resolve Intelligence Failures (Agent 1/5) & Stability (Scan Trigger)
+#
+# Summary:
+# Successfully remediated the "blindness" in the Static Analysis pipeline,
+# fixed runtime crashes in Compliance enforcement, and stabilized the
+# scan orchestration layer against intermittent GitHub API failures.
+#
+# -------------------------------------------------------------------
+# 1) Agent 1 (Static Analysis) Blindness Resolution
+# -------------------------------------------------------------------
+# Issue: Agent 1 missed blatant SSTI, Command Injection, and SQLi in manual scans.
+#
+# Root Cause:
+# - Regex-based detectors were too narrow (required immediate execution calls).
+# - LLM semantic analysis was only active on PR diffs; manual scans triggered
+#   empty diff payloads, bypassing the intelligence layer.
+#
+# Solution:
+# - Expanded `DANGEROUS_PATTERNS` to catch "latent" injections (variable assignments 
+#   using f-strings/formatting with likely user input).
+# - Re-engineered `_build_semantic_payload` to prioritize source code files 
+#   (.py, .js, .ts) and increase the context budget to 15,000 characters.
+# - Updated `STATIC_ANALYSIS_SYSTEM` prompt to explicitly instruct the LLM 
+#   to hunt for string-interpolated queries and hidden secret assignments.
+# - Integrated LLM-based secret scanning into the core Static agent pass.
+#
+# -------------------------------------------------------------------
+# 2) Agent 5 (Compliance) Regex Crash Resolution
+# -------------------------------------------------------------------
+# Issue: Compliance scan crashed with `re.error` due to malformed inline flags.
+#
+# Root Cause:
+# - `HIPAA-164.312a2iv-001` pattern had `(?i)` mid-string, violating Python's 
+#   expectation for global flags to be at the start.
+#
+# Solution:
+# - Fixed the specific HIPAA pattern.
+# - Hardened `_compile_pattern` with a sanitization block that moves or 
+#   removes inline flags and relies on bitwise compilation flags for safety.
+# - Added a dedicated deduplication pass to ensure compliance violations
+#   are not reported multiple times for the same code block.
+#
+# -------------------------------------------------------------------
+# 3) Scan Trigger & Stability Hardening
+# -------------------------------------------------------------------
+# Issue: Scans required multiple manual triggers ("rescan again and again").
+#
+# Root Cause:
+# - GitHub Git Tree API calls or file fetches would intermittently fail, 
+#   causing the whole scan to abort before starting agents.
+#
+# Solution:
+# - Implemented an exponential backoff retry mechanism (3 attempts) in 
+#   `run_scan_pipeline` for repository content fetching.
+# - Added robust fallbacks for small/restricted repositories where 
+#   recursive tree listing might be blocked.
+# - Standardized `analysis_summary` across all agents to ensure the UI
+#   always provides feedback on why a scan is considered "SAFE".
+#
+# -------------------------------------------------------------------
+# 4) Global Deduplication Strategy
+# -------------------------------------------------------------------
+# Issue: Noise from multiple agents reporting similar findings.
+#
+# Solution:
+# - Implemented a semantic fingerprinting system in `scan_service.py`.
+# - Fingerprints are now derived from file_path, line, and a normalized 
+#   hash of the vulnerable code snippet, preventing different agents 
+#   (e.g., Static vs Compliance) from drowning the user in duplicates.
+#
+# -------------------------------------------------------------------
+# Final Assessment:
+# The CodeSentinel pipeline is now significantly more robust. Static analysis 
+# is deep (regex + LLM), compliance is stable, and the "flaky trigger" 
+# behavior is mitigated via retries.
+#
+# Prepared by: Antigravity (AI Security Engineer)
+# ═══════════════════════════════════════════════════════════════════

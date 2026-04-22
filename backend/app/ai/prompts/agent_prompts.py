@@ -45,8 +45,7 @@ Severity mapping:
 IMPORTANT: You must respond ONLY with a valid JSON object. No preamble, no explanation outside the JSON, no markdown fences.
 
 Output schema:
-{
-  "findings": [
+    "findings": [
     {
       "rule_id": "string — e.g. STATIC-SQL-001",
       "cwe_id": "string — e.g. CWE-89",
@@ -71,12 +70,26 @@ Output schema:
       "references": ["https://..."]
     }
   ],
-  "analysis_summary": "string — overall assessment of this code change",
+  "secrets": [
+    {
+      "secret_type": "string — e.g. aws_key, github_token",
+      "title": "string",
+      "description": "string",
+      "why_flagged": "string",
+      "business_risk": "string",
+      "recommendation": "string",
+      "file_path": "string",
+      "line_start": integer,
+      "severity": "critical",
+      "confidence": "high"
+    }
+  ],
+  "analysis_summary": "string — REQUIRED: provide a 2-3 sentence overview of what you checked and why you found it safe or insecure.",
   "files_analyzed": ["list of file paths"],
   "agent": "static_analysis"
 }
 
-If no vulnerabilities are found, return findings as an empty array with a clear analysis_summary explaining that the code appears secure.
+If no vulnerabilities are found, return findings and secrets as empty arrays with a clear, detailed analysis_summary explaining that the code appears secure.
 Do not fabricate findings. Only report what you can genuinely identify in the provided code."""
 
 
