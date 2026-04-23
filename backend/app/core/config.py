@@ -5,6 +5,7 @@ Pydantic v2 settings with full environment variable validation.
 from __future__ import annotations
 
 import secrets
+import re
 from functools import lru_cache
 from typing import Any, List, Optional
 
@@ -141,12 +142,23 @@ class Settings(BaseSettings):
 
         key = key.replace("\r\n", "\n").replace("\r", "\n").strip()
 
-        # Preserve valid PEM as-is (PKCS#1 or PKCS#8). Reconstruct only when headers are missing.
-        has_begin = "-----BEGIN" in key
-        has_end = "-----END" in key
-        if not (has_begin and has_end):
-            raw = key.replace("\n", "").replace(" ", "")
-            lines = [raw[i:i + 64] for i in range(0, len(raw), 64)]
+        # Extract any PEM block embedded in extra text and rebuild a clean frame.
+        # Railway/Render secrets can include wrapping text or malformed line breaks.
+        match = re.search(
+            r"-----BEGIN\s+([A-Z ]+?)-----([\s\S]*?)-----END\s+\1-----",
+            key,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            pem_type = match.group(1).upper().strip()
+            payload = match.group(2)
+            payload = re.sub(r"[^A-Za-z0-9+/=]", "", payload)
+            lines = [payload[i:i + 64] for i in range(0, len(payload), 64) if payload[i:i + 64]]
+            key = f"-----BEGIN {pem_type}-----\n" + "\n".join(lines) + f"\n-----END {pem_type}-----"
+        else:
+            # No PEM frame found, assume raw base64 payload and build RSA frame as fallback.
+            raw = re.sub(r"[^A-Za-z0-9+/=]", "", key)
+            lines = [raw[i:i + 64] for i in range(0, len(raw), 64) if raw[i:i + 64]]
             key = "-----BEGIN RSA PRIVATE KEY-----\n" + "\n".join(lines) + "\n-----END RSA PRIVATE KEY-----"
 
         if not key.endswith("\n"):
