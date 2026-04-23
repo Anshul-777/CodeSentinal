@@ -368,6 +368,19 @@ async def run_scan_pipeline(scan_id: str) -> None:
             if result.extra:
                 agent_results_summary[agent_name].update(result.extra)
 
+    # Persist partial results before auto-fix so successful agents remain visible
+    # even if a later stage fails or the worker is interrupted.
+    async with get_db_context() as db:
+        result = await db.execute(select(Scan).where(Scan.id == scan_id))
+        scan_row = result.scalar_one_or_none()
+        if scan_row:
+            scan_row.agent_results = dict(agent_results_summary)
+            scan_row.agent_durations = dict(agent_durations)
+            scan_row.agent_states = dict(final_agent_states)
+            scan_row.findings_total = len(all_findings)
+            scan_row.files_scanned_count = len(file_contents)
+            await db.commit()
+
     # Dedupe across agents before auto-fix and persistence.
     all_findings = _deduplicate_findings(all_findings)
 
