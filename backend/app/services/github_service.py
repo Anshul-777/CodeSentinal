@@ -58,9 +58,11 @@ def _generate_app_jwt() -> str:
     try:
         return pyjwt.encode(payload, settings.github_app_pem, algorithm="RS256")
     except Exception as exc:
+        raw_len = len((settings.GITHUB_APP_PRIVATE_KEY or "").strip())
+        pem_len = len((settings.github_app_pem or "").strip())
         raise GitHubAuthError(
             "GitHub App private key is invalid or malformed in environment configuration. "
-            "Ensure GITHUB_APP_PRIVATE_KEY is the full PEM key with BEGIN/END lines."
+            f"Ensure GITHUB_APP_PRIVATE_KEY is complete. raw_len={raw_len}, normalized_len={pem_len}."
         ) from exc
 
 
@@ -158,7 +160,16 @@ async def fetch_file_content(
     ref: str = "HEAD",
 ) -> Optional[str]:
     """Fetch a specific file's content from the repository."""
-    headers = await get_authenticated_headers(installation_id)
+    auth_failed = False
+    try:
+        headers = await get_authenticated_headers(installation_id)
+    except GitHubAuthError:
+        # Fallback for public repositories: allow read-only access without App auth.
+        auth_failed = True
+        headers = {
+            "Accept": "application/vnd.github.v3+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
 
     async with httpx.AsyncClient(timeout=20.0) as client:
         resp = await client.get(
@@ -168,6 +179,11 @@ async def fetch_file_content(
         )
         if resp.status_code == 404:
             return None
+        if auth_failed and resp.status_code in (401, 403):
+            raise GitHubAuthError(
+                "GitHub App authentication failed and repository is not publicly readable. "
+                "Check GITHUB_APP_PRIVATE_KEY in worker environment."
+            )
         resp.raise_for_status()
 
         data = resp.json()
@@ -213,7 +229,16 @@ async def list_repository_files(
     ref: str = "HEAD",
 ) -> list[str]:
     """List repository files recursively using the Git tree API."""
-    headers = await get_authenticated_headers(installation_id)
+    auth_failed = False
+    try:
+        headers = await get_authenticated_headers(installation_id)
+    except GitHubAuthError:
+        # Fallback for public repositories: allow read-only tree listing without App auth.
+        auth_failed = True
+        headers = {
+            "Accept": "application/vnd.github.v3+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
 
     async with httpx.AsyncClient(timeout=25.0) as client:
         # Resolve branch/tag to commit SHA first.
@@ -222,9 +247,31 @@ async def list_repository_files(
             headers=headers,
         )
         if ref_resp.status_code == 404:
-            # Try direct commit SHA usage.
-            commit_sha = ref
+            if auth_failed:
+                # Public API fallback: try branch endpoint to resolve commit sha.
+                branch_resp = await client.get(
+                    f"{GITHUB_API}/repos/{repo_full_name}/branches/{ref}",
+                    headers=headers,
+                )
+                if branch_resp.status_code in (401, 403):
+                    raise GitHubAuthError(
+                        "GitHub App authentication failed and repository is not publicly readable. "
+                        "Check GITHUB_APP_PRIVATE_KEY in worker environment."
+                    )
+                if branch_resp.status_code == 404:
+                    commit_sha = ref
+                else:
+                    branch_resp.raise_for_status()
+                    commit_sha = ((branch_resp.json().get("commit") or {}).get("sha")) or ref
+            else:
+                # Try direct commit SHA usage.
+                commit_sha = ref
         else:
+            if auth_failed and ref_resp.status_code in (401, 403):
+                raise GitHubAuthError(
+                    "GitHub App authentication failed and repository is not publicly readable. "
+                    "Check GITHUB_APP_PRIVATE_KEY in worker environment."
+                )
             ref_resp.raise_for_status()
             commit_sha = (ref_resp.json().get("object") or {}).get("sha")
             if not commit_sha:
@@ -235,6 +282,11 @@ async def list_repository_files(
             headers=headers,
             params={"recursive": 1},
         )
+        if auth_failed and tree_resp.status_code in (401, 403):
+            raise GitHubAuthError(
+                "GitHub App authentication failed and repository is not publicly readable. "
+                "Check GITHUB_APP_PRIVATE_KEY in worker environment."
+            )
         tree_resp.raise_for_status()
         tree = tree_resp.json().get("tree", [])
         return [item.get("path", "") for item in tree if item.get("type") == "blob" and item.get("path")]
