@@ -114,6 +114,10 @@ class BaseAgent(ABC):
                 error=str(exc),
                 error_detail=repr(exc),
                 duration_seconds=duration,
+                extra={
+                    "analysis_summary": f"{self.display_name} failed: {exc}",
+                    "failed": True,
+                },
             )
 
     @abstractmethod

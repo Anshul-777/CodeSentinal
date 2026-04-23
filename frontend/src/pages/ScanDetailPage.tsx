@@ -359,6 +359,19 @@ export default function ScanDetailPage() {
                       {state === 'failed' && error && (
                         <div className="text-xs text-red-600 truncate">{error.slice(0, 40)}…</div>
                       )}
+                      {result?.analysis_summary && (
+                        <div className={clsx(
+                          'mt-2 text-[11px] leading-snug line-clamp-3',
+                          state === 'failed' ? 'text-red-700' : 'text-gray-600',
+                        )}>
+                          {result.analysis_summary}
+                        </div>
+                      )}
+                      {!result?.analysis_summary && state === 'completed' && (
+                        <div className="mt-2 text-[11px] leading-snug text-gray-500 line-clamp-3">
+                          Analysis completed. Open the card for details.
+                        </div>
+                      )}
 
                       {/* Expand toggle */}
                       {(state === 'completed' || state === 'failed') && (
