@@ -141,21 +141,13 @@ class Settings(BaseSettings):
 
         key = key.replace("\r\n", "\n").replace("\r", "\n").strip()
 
-        # Strip out headers, spaces, and newlines to get the pure base64 payload
-        raw = key
-        for header in [
-            "-----BEGIN RSA PRIVATE KEY-----",
-            "-----END RSA PRIVATE KEY-----",
-            "-----BEGIN PRIVATE KEY-----",
-            "-----END PRIVATE KEY-----",
-        ]:
-            raw = raw.replace(header, "")
-            
-        raw = raw.replace("\n", "").replace("\r", "").replace(" ", "").replace("\\n", "")
-        
-        # Reconstruct exactly as required by cryptography
-        lines = [raw[i:i + 64] for i in range(0, len(raw), 64)]
-        key = "-----BEGIN RSA PRIVATE KEY-----\n" + "\n".join(lines) + "\n-----END RSA PRIVATE KEY-----"
+        # Preserve valid PEM as-is (PKCS#1 or PKCS#8). Reconstruct only when headers are missing.
+        has_begin = "-----BEGIN" in key
+        has_end = "-----END" in key
+        if not (has_begin and has_end):
+            raw = key.replace("\n", "").replace(" ", "")
+            lines = [raw[i:i + 64] for i in range(0, len(raw), 64)]
+            key = "-----BEGIN RSA PRIVATE KEY-----\n" + "\n".join(lines) + "\n-----END RSA PRIVATE KEY-----"
 
         if not key.endswith("\n"):
             key += "\n"
